@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-base text-ink font-body antialiased;
+  }
+  body {
+    @apply m-0;
+  }
+  ::selection {
+    @apply bg-teal/30 text-ink;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0e1220;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a3153;
+    border-radius: 8px;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-panel border border-border rounded-xl shadow-panel;
+  }
+  .stat-figure {
+    @apply font-mono tabular-nums;
+  }
+  .route-chip {
+    @apply font-mono text-xs px-2 py-0.5 rounded-md border;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

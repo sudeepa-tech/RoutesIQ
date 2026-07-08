@@ -1,0 +1,29 @@
+import { Routes, Route } from 'react-router-dom';
+import Sidebar from './components/Sidebar.jsx';
+import MobileNav from './components/MobileNav.jsx';
+import { TransportDataProvider } from './hooks/useTransportData.jsx';
+import Dashboard from './pages/Dashboard.jsx';
+import RoutesPage from './pages/RoutesPage.jsx';
+import MapView from './pages/MapView.jsx';
+import Optimizer from './pages/Optimizer.jsx';
+import Riders from './pages/Riders.jsx';
+
+export default function App() {
+  return (
+    <TransportDataProvider>
+      <div className="h-screen w-screen flex bg-base text-ink font-body overflow-hidden">
+        <Sidebar />
+        <div className="flex-1 flex min-w-0 pb-14 md:pb-0">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/routes" element={<RoutesPage />} />
+            <Route path="/map" element={<MapView />} />
+            <Route path="/optimizer" element={<Optimizer />} />
+            <Route path="/riders" element={<Riders />} />
+          </Routes>
+        </div>
+        <MobileNav />
+      </div>
+    </TransportDataProvider>
+  );
+}

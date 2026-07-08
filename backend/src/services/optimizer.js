@@ -1,0 +1,261 @@
+/**
+ * AI-based Transport Route Optimization Engine
+ * ------------------------------------------------
+ * Two-stage heuristic used by fleet-routing systems (a capacitated
+ * clustering + local-search variant of the Capacitated Vehicle Routing
+ * Problem, CVRP):
+ *
+ *  Stage 1 - CAPACITATED SEED CLUSTERING
+ *    Groups student/staff pickup stops into vehicle-sized clusters using
+ *    a greedy farthest-first seeding (k-means++ style) followed by
+ *    capacity-constrained nearest-centroid assignment. This keeps
+ *    geographically close stops together while respecting each bus's
+ *    seat capacity.
+ *
+ *  Stage 2 - ROUTE SEQUENCING (TSP)
+ *    Within each cluster, stops are ordered with a Nearest-Neighbour
+ *    construction heuristic, then refined with 2-opt local search to
+ *    remove crossing/inefficient segments and minimise total route
+ *    distance back to the campus depot.
+ *
+ * All distances use the Haversine great-circle formula (km).
+ */
+
+const EARTH_RADIUS_KM = 6371;
+
+export function haversineKm(a, b) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** Pick k well-spread seed stops via farthest-point sampling. */
+function seedCentroids(stops, k) {
+  const seeds = [stops[Math.floor(Math.random() * stops.length)]];
+  while (seeds.length < k) {
+    let best = null;
+    let bestDist = -Infinity;
+    for (const s of stops) {
+      const dMin = Math.min(...seeds.map((c) => haversineKm(s, c)));
+      if (dMin > bestDist) {
+        bestDist = dMin;
+        best = s;
+      }
+    }
+    seeds.push(best);
+  }
+  return seeds.map((s) => ({ lat: s.lat, lng: s.lng }));
+}
+
+/**
+ * Stage 1: capacity-constrained clustering.
+ * vehicles: [{ id, capacity }]
+ * stops: [{ id, lat, lng, headcount, ... }]
+ * returns: Map<vehicleId, stops[]>
+ */
+export function clusterStops(stops, vehicles) {
+  const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
+  let centroids = seedCentroids(stops, sortedVehicles.length).slice();
+  const remaining = new Map(sortedVehicles.map((v) => [v.id, v.capacity]));
+  const assignment = new Map(sortedVehicles.map((v) => [v.id, []]));
+
+  // process largest-headcount / farthest-from-depot stops first so they
+  // don't get stranded once vehicles fill up
+  const order = [...stops].sort((a, b) => b.headcount - a.headcount);
+
+  for (const stop of order) {
+    let bestVehicle = null;
+    let bestScore = Infinity;
+    sortedVehicles.forEach((v, idx) => {
+      const cap = remaining.get(v.id);
+      if (cap < stop.headcount) return;
+      const d = haversineKm(stop, centroids[idx]);
+      if (d < bestScore) {
+        bestScore = d;
+        bestVehicle = idx;
+      }
+    });
+
+    // fallback: if nobody has capacity (shouldn't happen if total
+    // capacity >= total headcount), assign to least-overloaded vehicle
+    if (bestVehicle === null) {
+      let maxCap = -Infinity;
+      sortedVehicles.forEach((v, idx) => {
+        const cap = remaining.get(v.id);
+        if (cap > maxCap) {
+          maxCap = cap;
+          bestVehicle = idx;
+        }
+      });
+    }
+
+    const v = sortedVehicles[bestVehicle];
+    assignment.get(v.id).push(stop);
+    remaining.set(v.id, remaining.get(v.id) - stop.headcount);
+
+    // recompute centroid incrementally (running mean)
+    const clusterStopsSoFar = assignment.get(v.id);
+    const n = clusterStopsSoFar.length;
+    centroids[bestVehicle] = {
+      lat: centroids[bestVehicle].lat + (stop.lat - centroids[bestVehicle].lat) / n,
+      lng: centroids[bestVehicle].lng + (stop.lng - centroids[bestVehicle].lng) / n,
+    };
+  }
+
+  return assignment;
+}
+
+/** Stage 2a: Nearest-neighbour construction from the depot. */
+function nearestNeighbourOrder(depot, stops) {
+  const unvisited = [...stops];
+  const route = [];
+  let current = depot;
+  while (unvisited.length) {
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    unvisited.forEach((s, i) => {
+      const d = haversineKm(current, s);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    });
+    const [next] = unvisited.splice(bestIdx, 1);
+    route.push(next);
+    current = next;
+  }
+  return route;
+}
+
+function routeDistance(depot, route) {
+  let total = 0;
+  let prev = depot;
+  for (const s of route) {
+    total += haversineKm(prev, s);
+    prev = s;
+  }
+  total += haversineKm(prev, depot); // return to campus
+  return total;
+}
+
+/** Stage 2b: 2-opt local search to untangle the route. */
+function twoOpt(depot, route, maxIterations = 200) {
+  let best = route;
+  let bestDist = routeDistance(depot, best);
+  let improved = true;
+  let iterations = 0;
+
+  while (improved && iterations < maxIterations) {
+    improved = false;
+    iterations++;
+    for (let i = 0; i < best.length - 1; i++) {
+      for (let j = i + 1; j < best.length; j++) {
+        const candidate = [
+          ...best.slice(0, i),
+          ...best.slice(i, j + 1).reverse(),
+          ...best.slice(j + 1),
+        ];
+        const d = routeDistance(depot, candidate);
+        if (d < bestDist - 1e-9) {
+          best = candidate;
+          bestDist = d;
+          improved = true;
+        }
+      }
+    }
+  }
+  return { route: best, distance: bestDist };
+}
+
+/**
+ * Full pipeline: cluster stops to vehicles, then sequence each route.
+ * Returns per-vehicle route plans + fleet-level summary stats.
+ */
+export function optimizeFleet({ stops, vehicles, depot }) {
+  if (!stops.length) throw new Error('No stops supplied');
+  if (!vehicles.length) throw new Error('No vehicles supplied');
+
+  const totalHeadcount = stops.reduce((s, st) => s + st.headcount, 0);
+  const totalCapacity = vehicles.reduce((s, v) => s + v.capacity, 0);
+  if (totalCapacity < totalHeadcount) {
+    throw new Error(
+      `Fleet capacity (${totalCapacity}) is less than total riders (${totalHeadcount})`
+    );
+  }
+
+  const clusters = clusterStops(stops, vehicles);
+  const plans = [];
+
+  for (const vehicle of vehicles) {
+    const clusterStopsList = clusters.get(vehicle.id) || [];
+    if (!clusterStopsList.length) {
+      plans.push({
+        vehicleId: vehicle.id,
+        vehicle,
+        stops: [],
+        distanceKm: 0,
+        riders: 0,
+        utilization: 0,
+      });
+      continue;
+    }
+    const nnRoute = nearestNeighbourOrder(depot, clusterStopsList);
+    const { route, distance } = twoOpt(depot, nnRoute);
+    const riders = route.reduce((s, st) => s + st.headcount, 0);
+    plans.push({
+      vehicleId: vehicle.id,
+      vehicle,
+      stops: route,
+      distanceKm: Number(distance.toFixed(2)),
+      riders,
+      utilization: Number(((riders / vehicle.capacity) * 100).toFixed(1)),
+    });
+  }
+
+  // naive baseline for comparison: original (unoptimized) capacity-only
+  // sequential assignment with stops visited in original data order
+  const baselineDistance = computeBaselineDistance(stops, vehicles, depot);
+  const optimizedDistance = plans.reduce((s, p) => s + p.distanceKm, 0);
+
+  return {
+    plans,
+    summary: {
+      totalStops: stops.length,
+      totalRiders: totalHeadcount,
+      vehiclesUsed: plans.filter((p) => p.stops.length > 0).length,
+      vehiclesAvailable: vehicles.length,
+      totalCapacity,
+      fleetUtilization: Number(((totalHeadcount / totalCapacity) * 100).toFixed(1)),
+      baselineDistanceKm: Number(baselineDistance.toFixed(2)),
+      optimizedDistanceKm: Number(optimizedDistance.toFixed(2)),
+      distanceSavedKm: Number((baselineDistance - optimizedDistance).toFixed(2)),
+      distanceSavedPct: Number(
+        (((baselineDistance - optimizedDistance) / baselineDistance) * 100).toFixed(1)
+      ),
+    },
+  };
+}
+
+/** Baseline: fill vehicles in original list order, no geo-awareness. */
+function computeBaselineDistance(stops, vehicles, depot) {
+  const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
+  let vIdx = 0;
+  let remaining = sortedVehicles[0]?.capacity ?? 0;
+  const buckets = [[]];
+  for (const stop of stops) {
+    if (remaining < stop.headcount && vIdx < sortedVehicles.length - 1) {
+      vIdx++;
+      remaining = sortedVehicles[vIdx].capacity;
+      buckets.push([]);
+    }
+    buckets[buckets.length - 1].push(stop);
+    remaining -= stop.headcount;
+  }
+  return buckets.reduce((sum, bucket) => sum + routeDistance(depot, bucket), 0);
+}

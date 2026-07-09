@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutGrid, Route, Map, Sparkles, Users, BusFront } from 'lucide-react';
+import { LayoutGrid, Route, Map, Sparkles, Users, BusFront, FileBarChart, PiggyBank } from 'lucide-react';
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutGrid, end: true },
@@ -7,6 +7,8 @@ const NAV = [
   { to: '/map', label: 'Live Map', icon: Map },
   { to: '/optimizer', label: 'Optimizer', icon: Sparkles },
   { to: '/riders', label: 'Riders', icon: Users },
+  { to: '/report', label: 'Report', icon: FileBarChart },
+  { to: '/consolidation', label: 'AI Suggestions', icon: PiggyBank },
 ];
 
 export default function Sidebar() {

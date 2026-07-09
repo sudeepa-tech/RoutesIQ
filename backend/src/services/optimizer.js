@@ -112,7 +112,7 @@ export function clusterStops(stops, vehicles) {
 }
 
 /** Stage 2a: Nearest-neighbour construction from the depot. */
-function nearestNeighbourOrder(depot, stops) {
+export function nearestNeighbourOrder(depot, stops) {
   const unvisited = [...stops];
   const route = [];
   let current = depot;
@@ -133,7 +133,7 @@ function nearestNeighbourOrder(depot, stops) {
   return route;
 }
 
-function routeDistance(depot, route) {
+export function routeDistance(depot, route) {
   let total = 0;
   let prev = depot;
   for (const s of route) {
@@ -145,7 +145,7 @@ function routeDistance(depot, route) {
 }
 
 /** Stage 2b: 2-opt local search to untangle the route. */
-function twoOpt(depot, route, maxIterations = 200) {
+export function twoOpt(depot, route, maxIterations = 200) {
   let best = route;
   let bestDist = routeDistance(depot, best);
   let improved = true;

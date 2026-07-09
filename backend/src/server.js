@@ -10,6 +10,7 @@ import uploadRouter from './routes/upload.js';
 import vehiclesRouter from './routes/vehicles.js';
 import ridersRouter from './routes/riders.js';
 import optimizeRouter from './routes/optimize.js';
+import consolidateRouter from './routes/consolidate.js';
 import statsRouter from './routes/stats.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
@@ -42,6 +43,7 @@ app.use('/api/upload', uploadRouter);
 app.use('/api/vehicles', vehiclesRouter);
 app.use('/api/riders', ridersRouter);
 app.use('/api/optimize', optimizeRouter);
+app.use('/api/consolidate', consolidateRouter);
 app.use('/api/stats', statsRouter);
 
 app.use(notFoundHandler);

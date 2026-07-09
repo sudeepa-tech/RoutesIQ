@@ -27,6 +27,7 @@ export const api = {
   runOptimization: (depot) =>
     client.post('/optimize', depot ? { depot } : {}).then((r) => r.data),
   getLatestOptimization: () => client.get('/optimize/latest').then((r) => r.data),
+  runConsolidation: (params) => client.post('/consolidate', params || {}).then((r) => r.data),
 };
 
 export default api;

@@ -7,6 +7,8 @@ import RoutesPage from './pages/RoutesPage.jsx';
 import MapView from './pages/MapView.jsx';
 import Optimizer from './pages/Optimizer.jsx';
 import Riders from './pages/Riders.jsx';
+import Report from './pages/Report.jsx';
+import ConsolidationReport from './pages/ConsolidationReport.jsx';
 
 export default function App() {
   return (
@@ -20,6 +22,8 @@ export default function App() {
             <Route path="/map" element={<MapView />} />
             <Route path="/optimizer" element={<Optimizer />} />
             <Route path="/riders" element={<Riders />} />
+            <Route path="/report" element={<Report />} />
+            <Route path="/consolidation" element={<ConsolidationReport />} />
           </Routes>
         </div>
         <MobileNav />

@@ -1,12 +1,12 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutGrid, Route, Map, Sparkles, Users } from 'lucide-react';
+import { LayoutGrid, Route, Sparkles, FileBarChart, PiggyBank } from 'lucide-react';
 
 const NAV = [
   { to: '/', label: 'Home', icon: LayoutGrid, end: true },
   { to: '/routes', label: 'Routes', icon: Route },
-  { to: '/map', label: 'Map', icon: Map },
   { to: '/optimizer', label: 'Optimize', icon: Sparkles },
-  { to: '/riders', label: 'Riders', icon: Users },
+  { to: '/report', label: 'Report', icon: FileBarChart },
+  { to: '/consolidation', label: 'AI Tips', icon: PiggyBank },
 ];
 
 export default function MobileNav() {

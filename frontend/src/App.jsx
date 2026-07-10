@@ -9,6 +9,9 @@ import Optimizer from './pages/Optimizer.jsx';
 import Riders from './pages/Riders.jsx';
 import Report from './pages/Report.jsx';
 import ConsolidationReport from './pages/ConsolidationReport.jsx';
+import FleetManagement from './pages/FleetManagement.jsx';
+import ImpactedStudentsReport from './pages/ImpactedStudentsReport.jsx';
+import SuggestedMap from './pages/SuggestedMap.jsx';
 
 export default function App() {
   return (
@@ -24,6 +27,9 @@ export default function App() {
             <Route path="/riders" element={<Riders />} />
             <Route path="/report" element={<Report />} />
             <Route path="/consolidation" element={<ConsolidationReport />} />
+            <Route path="/fleet" element={<FleetManagement />} />
+            <Route path="/impacted-students" element={<ImpactedStudentsReport />} />
+            <Route path="/suggested-map" element={<SuggestedMap />} />
           </Routes>
         </div>
         <MobileNav />

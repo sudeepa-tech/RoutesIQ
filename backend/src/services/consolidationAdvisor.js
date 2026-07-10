@@ -2,28 +2,33 @@
  * Consolidation Advisor
  * ------------------------------------------------
  * Takes an already-optimized fleet plan (see optimizer.js) and looks for
- * opportunities to MERGE under-utilized routes together so fewer vehicles
- * are needed overall — the classic "70% + 30% = one full bus" idea.
+ * opportunities to GROUP under-utilized routes together onto a single
+ * vehicle so fewer vehicles are needed overall — the "70% + 30% = one
+ * full bus" idea, generalized to N routes when a single pairwise merge
+ * can't reach a truly full load.
  *
- * Heuristic (greedy bin-consolidation, nearest-centroid first):
+ * Heuristic (greedy nearest-centroid grouping):
  *   1. Sort routes by utilization, ascending (emptiest buses first).
- *   2. For the emptiest route, look at every OTHER still-active route whose
- *      remaining seats can absorb this route's riders.
- *   3. Among capacity-feasible candidates, pick the geographically closest
- *      one (by stop-centroid distance) within `maxMergeDistanceKm` — this
- *      keeps the merged route realistic instead of zig-zagging across the
- *      city just to fill seats.
- *   4. Merge: source route's stops move onto the target vehicle, the
- *      target's stop sequence is re-optimized (nearest-neighbour + 2-opt),
- *      and the source vehicle is marked "released" (no longer needed).
- *   5. Repeat until no more feasible, distance-bounded merges exist.
+ *   2. Seed a group with the emptiest route. Repeatedly pull in the
+ *      geographically closest still-active route (within
+ *      `maxMergeDistanceKm` of the group's current centroid) whose riders
+ *      still fit in the largest-capacity vehicle seen in the group so far.
+ *   3. Stop growing the group once its combined utilization (against the
+ *      largest vehicle in the group) lands in the "near-full" band —
+ *      >= `minCombinedUtilization` (default 90%) and <= 100%.
+ *   4. If the band is reached, keep the group's largest-capacity vehicle
+ *      as the survivor, re-sequence its stops (nearest-neighbour + 2-opt)
+ *      over ALL the group's stops, and release every other vehicle in the
+ *      group. If the band can't be reached (no more nearby routes to add),
+ *      the seed route is left alone and the next-emptiest route is tried.
  *
  * This is a heuristic, not a guaranteed-optimal bin packing — but it's
- * fast, explainable, and respects geography, which a pure knapsack
- * solve on headcounts alone would not.
+ * fast, explainable, respects geography, and — unlike a pure pairwise
+ * merge — can actually land in a tight utilization band by pulling in a
+ * third or fourth nearby route when two alone don't add up to "full".
  */
 
-import { haversineKm, nearestNeighbourOrder, twoOpt, routeDistance } from './optimizer.js';
+import { haversineKm, nearestNeighbourOrder, twoOpt } from './optimizer.js';
 
 function centroidOf(stops) {
   if (!stops.length) return null;
@@ -34,13 +39,14 @@ function centroidOf(stops) {
 
 /**
  * plans: output of optimizeFleet().plans
- * options: { utilizationThreshold (default 70), maxMergeDistanceKm (default 12) }
+ * options: { utilizationThreshold (default 70), maxMergeDistanceKm (default 12),
+ *            minCombinedUtilization (default 90) }
  */
 export function suggestConsolidation(plans, depot, options = {}) {
   const utilizationThreshold = options.utilizationThreshold ?? 70;
   const maxMergeDistanceKm = options.maxMergeDistanceKm ?? 12;
+  const minCombinedUtilization = options.minCombinedUtilization ?? 90;
 
-  // working copies we can mutate as merges happen
   const active = plans
     .filter((p) => p.stops.length > 0)
     .map((p) => ({
@@ -56,76 +62,89 @@ export function suggestConsolidation(plans, depot, options = {}) {
   const suggestions = [];
   const originalTotalDistance = active.reduce((s, r) => s + r.distanceKm, 0);
   const originalVehicleCount = active.length;
+  const givenUp = new Set(); // routeNos we've already tried and couldn't reach the band
 
-  let changed = true;
-  while (changed) {
-    changed = false;
+  let progress = true;
+  while (progress) {
+    progress = false;
 
-    // work on a fresh utilization-ascending pass each loop since merges
-    // change utilizations
-    const candidates = active
-      .filter((r) => !r.released)
+    const sources = active
+      .filter((r) => !r.released && !givenUp.has(r.routeNo))
+      .filter((r) => (r.riders / r.vehicle.capacity) * 100 < utilizationThreshold)
       .sort((a, b) => a.riders / a.vehicle.capacity - b.riders / b.vehicle.capacity);
 
-    for (const source of candidates) {
-      if (source.released) continue;
-      const sourceUtil = (source.riders / source.vehicle.capacity) * 100;
-      if (sourceUtil >= utilizationThreshold) continue; // already efficient, skip
+    if (!sources.length) break;
+    const seed = sources[0];
 
-      const sourceCentroid = centroidOf(source.stops);
+    // grow a group starting from the seed, pulling in the nearest feasible
+    // route each step, until the combined load lands in the full-load band
+    const group = [seed];
+    let groupRiders = seed.riders;
+    const survivorCapacity = () => Math.max(...group.map((r) => r.vehicle.capacity));
 
-      // find the best merge target: capacity-feasible + closest by centroid
+    while ((groupRiders / survivorCapacity()) * 100 < minCombinedUtilization) {
+      const centroid = centroidOf(group.flatMap((r) => r.stops));
       let best = null;
       let bestDist = Infinity;
-      for (const target of active) {
-        if (target.released || target === source) continue;
-        const combinedRiders = target.riders + source.riders;
-        if (combinedRiders > target.vehicle.capacity) continue;
-        const targetCentroid = centroidOf(target.stops);
-        const d = haversineKm(sourceCentroid, targetCentroid);
+      for (const cand of active) {
+        if (cand.released || group.includes(cand)) continue;
+        const newRiders = groupRiders + cand.riders;
+        const newCapacity = Math.max(survivorCapacity(), cand.vehicle.capacity);
+        if (newRiders > newCapacity) continue; // wouldn't fit even in the bigger vehicle
+        const d = haversineKm(centroid, centroidOf(cand.stops));
         if (d <= maxMergeDistanceKm && d < bestDist) {
           bestDist = d;
-          best = target;
+          best = cand;
         }
       }
+      if (!best) break; // nothing nearby left that fits
+      group.push(best);
+      groupRiders += best.riders;
+    }
 
-      if (!best) continue;
+    const finalUtil = (groupRiders / survivorCapacity()) * 100;
 
-      // perform the merge: re-sequence target's route with the combined stops
-      const combinedStops = [...best.stops, ...source.stops];
+    if (group.length > 1 && finalUtil >= minCombinedUtilization && finalUtil <= 100 + 1e-6) {
+      const survivor = group.reduce((a, b) => (a.vehicle.capacity >= b.vehicle.capacity ? a : b));
+      const others = group.filter((r) => r !== survivor);
+      // tag every stop with which route it originally belonged to, so
+      // downstream reporting can tell "impacted" riders (moved to a new
+      // vehicle) apart from the survivor's own original riders
+      const combinedStops = group.flatMap((r) => r.stops.map((s) => ({ ...s, originRouteNo: r.routeNo })));
       const nn = nearestNeighbourOrder(depot, combinedStops);
       const { route, distance } = twoOpt(depot, nn);
-      const newRiders = best.riders + source.riders;
 
       suggestions.push({
-        action: 'merge',
-        fromRoute: source.routeNo,
-        fromVehicle: source.vehicle.vehicleNo,
-        fromRiders: source.riders,
-        fromUtilizationPct: Number(sourceUtil.toFixed(1)),
-        intoRoute: best.routeNo,
-        intoVehicle: best.vehicle.vehicleNo,
-        centroidDistanceKm: Number(bestDist.toFixed(2)),
-        combinedRiders: newRiders,
-        combinedUtilizationPct: Number(((newRiders / best.vehicle.capacity) * 100).toFixed(1)),
-        distanceBeforeKm: Number((best.distanceKm + source.distanceKm).toFixed(2)),
+        mergedRoutes: group.map((r) => r.routeNo),
+        intoRoute: survivor.routeNo,
+        intoVehicle: survivor.vehicle.vehicleNo,
+        freedVehicles: others.map((r) => ({
+          routeNo: r.routeNo,
+          vehicleNo: r.vehicle.vehicleNo,
+          capacity: r.vehicle.capacity,
+          priorUtilizationPct: Number(((r.riders / r.vehicle.capacity) * 100).toFixed(1)),
+        })),
+        combinedRiders: groupRiders,
+        combinedUtilizationPct: Number(finalUtil.toFixed(1)),
+        distanceBeforeKm: Number(group.reduce((s, r) => s + r.distanceKm, 0).toFixed(2)),
         distanceAfterKm: Number(distance.toFixed(2)),
-        vehicleFreed: {
-          vehicleNo: source.vehicle.vehicleNo,
-          capacity: source.vehicle.capacity,
-        },
+        orderedStops: route, // final sequenced stops on the survivor, each tagged with originRouteNo
       });
 
-      // apply merge to working state
-      best.stops = route;
-      best.riders = newRiders;
-      best.distanceKm = Number(distance.toFixed(2));
-      source.released = true;
-      source.stops = [];
-      source.riders = 0;
-
-      changed = true;
-      break; // restart the pass since utilizations shifted
+      survivor.stops = route;
+      survivor.riders = groupRiders;
+      survivor.distanceKm = Number(distance.toFixed(2));
+      for (const o of others) {
+        o.released = true;
+        o.stops = [];
+        o.riders = 0;
+      }
+      progress = true;
+    } else {
+      // couldn't reach the full-load band with what's nearby — leave this
+      // route as-is and try the next-emptiest one instead
+      givenUp.add(seed.routeNo);
+      progress = true;
     }
   }
 
@@ -165,7 +184,7 @@ export function computeRoi(metrics, assumptions = {}) {
   const fixedMonthlySavings = metrics.vehiclesFreedCount * costPerVehiclePerMonth;
   const fixedAnnualSavings = fixedMonthlySavings * 12;
 
-  const distanceDeltaPerTripKm = metrics.distanceDeltaKm; // can be negative (worse) or positive (better)
+  const distanceDeltaPerTripKm = metrics.distanceDeltaKm; // can be negative (better) or positive (worse)
   const dailyFuelDeltaCost = distanceDeltaPerTripKm * tripsPerDay * fuelCostPerKm;
   const monthlyFuelDeltaCost = dailyFuelDeltaCost * operatingDaysPerMonth;
   const annualFuelDeltaCost = monthlyFuelDeltaCost * 12;

@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Sparkles, Loader2, PiggyBank, BusFront, TrendingDown, ArrowRight, IndianRupee } from 'lucide-react';
+import { Sparkles, Loader2, PiggyBank, BusFront, TrendingDown, IndianRupee } from 'lucide-react';
 import Topbar from '../components/Topbar.jsx';
 import StatCard from '../components/StatCard.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { useTransportData } from '../hooks/useTransportData.jsx';
-import api from '../services/api.js';
 
 const DEFAULTS = {
   utilizationThreshold: 70,
   maxMergeDistanceKm: 12,
+  minCombinedUtilization: 90,
   costPerVehiclePerMonth: 45000,
   fuelCostPerKm: 18,
   tripsPerDay: 2,
@@ -18,11 +18,9 @@ const DEFAULTS = {
 const fmtINR = (n) => `\u20B9${Number(n).toLocaleString('en-IN')}`;
 
 export default function ConsolidationReport() {
-  const { stats, optimization, refreshStats } = useTransportData();
+  const { stats, optimization, consolidation, runConsolidation, loading, error, refreshStats } = useTransportData();
   const [form, setForm] = useState(DEFAULTS);
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const result = consolidation;
 
   useEffect(() => {
     refreshStats().catch(() => {});
@@ -34,15 +32,10 @@ export default function ConsolidationReport() {
   };
 
   const handleRun = async () => {
-    setLoading(true);
-    setError(null);
     try {
-      const data = await api.runConsolidation(form);
-      setResult(data);
-    } catch (err) {
-      setError(err.response?.data?.error?.message || err.message);
-    } finally {
-      setLoading(false);
+      await runConsolidation(form);
+    } catch {
+      // error already captured in shared context state
     }
   };
 
@@ -87,6 +80,7 @@ export default function ConsolidationReport() {
           </p>
           <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-4">
             <Field label="Merge below utilization %" value={form.utilizationThreshold} onChange={update('utilizationThreshold')} />
+            <Field label="Full-load target % (min)" value={form.minCombinedUtilization} onChange={update('minCombinedUtilization')} />
             <Field label="Max merge distance (km)" value={form.maxMergeDistanceKm} onChange={update('maxMergeDistanceKm')} />
             <Field label="Cost / vehicle / month (₹)" value={form.costPerVehiclePerMonth} onChange={update('costPerVehiclePerMonth')} />
             <Field label="Fuel cost / km (₹)" value={form.fuelCostPerKm} onChange={update('fuelCostPerKm')} />
@@ -122,39 +116,50 @@ export default function ConsolidationReport() {
               <h3 className="font-display font-medium text-sm mb-4">Suggested merges</h3>
               {result.suggestions.length === 0 ? (
                 <p className="text-sm text-ink-muted">
-                  No feasible merges found within the current thresholds — try raising the
-                  utilization threshold or the max merge distance.
+                  No feasible merges found within the current thresholds — try lowering the
+                  full-load target or raising the max merge distance.
                 </p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left text-ink-muted text-xs uppercase tracking-wider">
-                        <th className="px-3 py-2 font-medium">Merge</th>
-                        <th className="px-3 py-2 font-medium text-right">From util.</th>
+                        <th className="px-3 py-2 font-medium">Merged routes</th>
+                        <th className="px-3 py-2 font-medium">Into</th>
                         <th className="px-3 py-2 font-medium text-right">Combined util.</th>
-                        <th className="px-3 py-2 font-medium text-right">Centroid dist.</th>
+                        <th className="px-3 py-2 font-medium text-right">Riders</th>
                         <th className="px-3 py-2 font-medium text-right">Route dist. Δ</th>
-                        <th className="px-3 py-2 font-medium">Vehicle freed</th>
+                        <th className="px-3 py-2 font-medium">Vehicles freed</th>
                       </tr>
                     </thead>
                     <tbody>
                       {result.suggestions.map((s, i) => (
                         <tr key={i} className="border-b border-border/60 last:border-0 hover:bg-panel2/40">
                           <td className="px-3 py-2.5">
-                            <div className="flex items-center gap-1.5 font-mono text-xs">
-                              <span className="route-chip border-coral/30 text-coral bg-coral/10">{s.fromRoute}</span>
-                              <ArrowRight size={12} className="text-ink-faint" />
-                              <span className="route-chip border-teal/30 text-teal bg-teal/10">{s.intoRoute}</span>
+                            <div className="flex flex-wrap items-center gap-1 font-mono text-xs">
+                              {s.mergedRoutes.map((r) => (
+                                <span
+                                  key={r}
+                                  className={`route-chip ${
+                                    r === s.intoRoute
+                                      ? 'border-teal/30 text-teal bg-teal/10'
+                                      : 'border-coral/30 text-coral bg-coral/10'
+                                  }`}
+                                >
+                                  {r}
+                                </span>
+                              ))}
                             </div>
                           </td>
-                          <td className="px-3 py-2.5 text-right font-mono text-amber">{s.fromUtilizationPct}%</td>
+                          <td className="px-3 py-2.5 font-mono text-xs text-ink-muted">{s.intoVehicle}</td>
                           <td className="px-3 py-2.5 text-right font-mono text-teal">{s.combinedUtilizationPct}%</td>
-                          <td className="px-3 py-2.5 text-right font-mono text-ink-muted">{s.centroidDistanceKm} km</td>
+                          <td className="px-3 py-2.5 text-right font-mono">{s.combinedRiders}</td>
                           <td className="px-3 py-2.5 text-right font-mono">
                             {(s.distanceAfterKm - s.distanceBeforeKm).toFixed(1)} km
                           </td>
-                          <td className="px-3 py-2.5 font-mono text-xs text-ink-muted">{s.vehicleFreed.vehicleNo} ({s.vehicleFreed.capacity}-seat)</td>
+                          <td className="px-3 py-2.5 font-mono text-xs text-ink-muted">
+                            {s.freedVehicles.map((v) => `${v.vehicleNo} (${v.capacity}-seat)`).join(', ')}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

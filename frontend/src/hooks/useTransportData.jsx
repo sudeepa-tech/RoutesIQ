@@ -8,6 +8,7 @@ export function TransportDataProvider({ children }) {
   const [vehicles, setVehicles] = useState([]);
   const [stops, setStops] = useState([]);
   const [optimization, setOptimization] = useState(null);
+  const [consolidation, setConsolidation] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -46,12 +47,27 @@ export function TransportDataProvider({ children }) {
     [refreshStats, refreshVehiclesAndStops]
   );
 
-  const runOptimization = useCallback(async (depot) => {
+  const runOptimization = useCallback(async (params) => {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.runOptimization(depot);
+      const result = await api.runOptimization(params);
       setOptimization(result);
+      return result;
+    } catch (err) {
+      setError(err.response?.data?.error?.message || err.message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const runConsolidation = useCallback(async (params) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.runConsolidation(params);
+      setConsolidation(result);
       return result;
     } catch (err) {
       setError(err.response?.data?.error?.message || err.message);
@@ -66,12 +82,14 @@ export function TransportDataProvider({ children }) {
     vehicles,
     stops,
     optimization,
+    consolidation,
     loading,
     error,
     refreshStats,
     refreshVehiclesAndStops,
     uploadWorkbook,
     runOptimization,
+    runConsolidation,
   };
 
   return (

@@ -9,6 +9,7 @@ import { useTransportData } from '../hooks/useTransportData.jsx';
 export default function Optimizer() {
   const { stats, optimization, runOptimization, loading, refreshStats, error } = useTransportData();
   const [phase, setPhase] = useState('idle'); // idle | clustering | sequencing | done
+  const [targetUtilizationPct, setTargetUtilizationPct] = useState(100);
 
   useEffect(() => {
     refreshStats().catch(() => {});
@@ -18,7 +19,7 @@ export default function Optimizer() {
     setPhase('clustering');
     const clusterTimer = setTimeout(() => setPhase('sequencing'), 500);
     try {
-      await runOptimization();
+      await runOptimization({ targetUtilizationPct });
       setPhase('done');
     } catch {
       setPhase('idle');
@@ -42,23 +43,49 @@ export default function Optimizer() {
     <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
       <Topbar title="Optimizer" subtitle="Capacitated clustering + 2-opt sequencing" />
       <div className="p-6 space-y-6">
-        <div className="panel p-6 flex items-center justify-between flex-wrap gap-4">
-          <div>
-            <h2 className="font-display font-medium mb-1">Run route optimization</h2>
-            <p className="text-sm text-ink-muted max-w-xl">
-              Clusters {stats.stops} pickup stops across {stats.vehicles} vehicles by capacity and
-              geography, then sequences each route with nearest-neighbour + 2-opt to minimize
-              distance back to campus.
+        <div className="panel p-6">
+          <div className="flex items-center justify-between flex-wrap gap-4 mb-5">
+            <div>
+              <h2 className="font-display font-medium mb-1">Run route optimization</h2>
+              <p className="text-sm text-ink-muted max-w-xl">
+                Clusters {stats.stops} pickup stops across {stats.vehicles} vehicles by capacity and
+                geography, then sequences each route with nearest-neighbour + 2-opt to minimize
+                distance back to campus.
+              </p>
+            </div>
+            <button
+              onClick={handleRun}
+              disabled={loading}
+              className="flex items-center gap-2 bg-teal text-base font-medium px-5 py-2.5 rounded-lg hover:brightness-110 active:brightness-95 transition disabled:opacity-60 shrink-0"
+            >
+              {loading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+              {loading ? phase === 'clustering' ? 'Clustering stops…' : 'Sequencing routes…' : 'Run optimizer'}
+            </button>
+          </div>
+
+          <div className="border-t border-border pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <label htmlFor="utilCap" className="text-xs uppercase tracking-wide text-ink-muted">
+                Target utilization cap per vehicle
+              </label>
+              <span className="font-mono text-sm text-amber">{targetUtilizationPct}%</span>
+            </div>
+            <input
+              id="utilCap"
+              type="range"
+              min={50}
+              max={100}
+              step={5}
+              value={targetUtilizationPct}
+              onChange={(e) => setTargetUtilizationPct(Number(e.target.value))}
+              className="w-full accent-amber"
+            />
+            <p className="text-xs text-ink-faint mt-2 leading-relaxed">
+              Buses are filled up to this % of their real seat capacity as a target — never over
+              100%. If the cap is too tight to seat everyone, it's relaxed automatically per bus
+              (never beyond true capacity) so no rider is left without a seat.
             </p>
           </div>
-          <button
-            onClick={handleRun}
-            disabled={loading}
-            className="flex items-center gap-2 bg-teal text-base font-medium px-5 py-2.5 rounded-lg hover:brightness-110 active:brightness-95 transition disabled:opacity-60 shrink-0"
-          >
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-            {loading ? phase === 'clustering' ? 'Clustering stops…' : 'Sequencing routes…' : 'Run optimizer'}
-          </button>
         </div>
 
         {error && (
@@ -82,6 +109,13 @@ export default function Optimizer() {
                 delta={`${summary.distanceSavedKm} km saved`}
               />
             </div>
+
+            {summary.vehiclesOverTargetCap > 0 && (
+              <div className="bg-amber/10 border border-amber/30 text-amber text-xs px-4 py-3 rounded-lg font-mono">
+                {summary.vehiclesOverTargetCap} vehicle(s) were filled to full capacity (above the {summary.targetUtilizationCapPct}% target)
+                because the target alone couldn't seat every rider — no vehicle ever exceeds its real seat capacity.
+              </div>
+            )}
 
             <div className="panel p-5">
               <h3 className="font-display font-medium text-sm mb-4">Baseline vs optimized distance</h3>

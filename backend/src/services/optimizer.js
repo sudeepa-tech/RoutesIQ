@@ -57,12 +57,19 @@ function seedCentroids(stops, k) {
  * Stage 1: capacity-constrained clustering.
  * vehicles: [{ id, capacity }]
  * stops: [{ id, lat, lng, headcount, ... }]
+ * options.targetUtilizationPct: caps how full each vehicle is allowed to
+ *   get during clustering (default 100 = use full seat capacity). This
+ *   NEVER exceeds the vehicle's real capacity — it only ever restricts
+ *   further, e.g. 90 leaves a comfort/safety margin of empty seats.
  * returns: Map<vehicleId, stops[]>
  */
-export function clusterStops(stops, vehicles) {
+export function clusterStops(stops, vehicles, options = {}) {
+  const targetUtilizationPct = Math.min(100, Math.max(1, options.targetUtilizationPct ?? 100));
+  const effectiveCapacity = (v) => Math.max(1, Math.floor(v.capacity * (targetUtilizationPct / 100)));
+
   const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
   let centroids = seedCentroids(stops, sortedVehicles.length).slice();
-  const remaining = new Map(sortedVehicles.map((v) => [v.id, v.capacity]));
+  const remaining = new Map(sortedVehicles.map((v) => [v.id, effectiveCapacity(v)]));
   const assignment = new Map(sortedVehicles.map((v) => [v.id, []]));
 
   // process largest-headcount / farthest-from-depot stops first so they
@@ -82,9 +89,25 @@ export function clusterStops(stops, vehicles) {
       }
     });
 
-    // fallback: if nobody has capacity (shouldn't happen if total
-    // capacity >= total headcount), assign to least-overloaded vehicle
+    // fallback: if nobody has room under the *target* cap (shouldn't
+    // happen if total effective capacity >= total headcount), fall back
+    // to the vehicle with the most REAL remaining seats — this may push
+    // that vehicle above the target utilization cap, but will still never
+    // exceed its true seat capacity.
     if (bestVehicle === null) {
+      let maxRealRemaining = -Infinity;
+      sortedVehicles.forEach((v, idx) => {
+        const assignedSoFar = assignment.get(v.id).reduce((s, st) => s + st.headcount, 0);
+        const realRemaining = v.capacity - assignedSoFar;
+        if (realRemaining >= stop.headcount && realRemaining > maxRealRemaining) {
+          maxRealRemaining = realRemaining;
+          bestVehicle = idx;
+        }
+      });
+    }
+    if (bestVehicle === null) {
+      // truly infeasible even ignoring the target cap — let optimizeFleet's
+      // upfront capacity check surface a clear error before we get here
       let maxCap = -Infinity;
       sortedVehicles.forEach((v, idx) => {
         const cap = remaining.get(v.id);
@@ -176,11 +199,14 @@ export function twoOpt(depot, route, maxIterations = 200) {
 /**
  * Full pipeline: cluster stops to vehicles, then sequence each route.
  * Returns per-vehicle route plans + fleet-level summary stats.
+ * options.targetUtilizationPct: global cap on how full each vehicle may
+ *   get (1-100, default 100). Never exceeds real seat capacity.
  */
-export function optimizeFleet({ stops, vehicles, depot }) {
+export function optimizeFleet({ stops, vehicles, depot, targetUtilizationPct = 100 }) {
   if (!stops.length) throw new Error('No stops supplied');
   if (!vehicles.length) throw new Error('No vehicles supplied');
 
+  const cappedPct = Math.min(100, Math.max(1, targetUtilizationPct));
   const totalHeadcount = stops.reduce((s, st) => s + st.headcount, 0);
   const totalCapacity = vehicles.reduce((s, v) => s + v.capacity, 0);
   if (totalCapacity < totalHeadcount) {
@@ -188,8 +214,13 @@ export function optimizeFleet({ stops, vehicles, depot }) {
       `Fleet capacity (${totalCapacity}) is less than total riders (${totalHeadcount})`
     );
   }
+  // Note: the utilization cap is a SOFT target — if it's too tight to fit
+  // everyone, clusterStops' fallback relaxes it per-vehicle (never beyond
+  // real seat capacity) rather than failing the whole optimization. This
+  // matches "don't leave capacity unused" — every rider gets a seat as
+  // long as the real fleet capacity allows it.
 
-  const clusters = clusterStops(stops, vehicles);
+  const clusters = clusterStops(stops, vehicles, { targetUtilizationPct: cappedPct });
   const plans = [];
 
   for (const vehicle of vehicles) {
@@ -222,6 +253,7 @@ export function optimizeFleet({ stops, vehicles, depot }) {
   // sequential assignment with stops visited in original data order
   const baselineDistance = computeBaselineDistance(stops, vehicles, depot);
   const optimizedDistance = plans.reduce((s, p) => s + p.distanceKm, 0);
+  const vehiclesOverCap = plans.filter((p) => p.utilization > cappedPct + 0.5).length;
 
   return {
     plans,
@@ -238,6 +270,8 @@ export function optimizeFleet({ stops, vehicles, depot }) {
       distanceSavedPct: Number(
         (((baselineDistance - optimizedDistance) / baselineDistance) * 100).toFixed(1)
       ),
+      targetUtilizationCapPct: cappedPct,
+      vehiclesOverTargetCap: vehiclesOverCap, // vehicles filled to full capacity above the target (real seat capacity is still never exceeded)
     },
   };
 }

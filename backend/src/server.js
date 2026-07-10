@@ -8,10 +8,13 @@ import rateLimit from 'express-rate-limit';
 
 import uploadRouter from './routes/upload.js';
 import vehiclesRouter from './routes/vehicles.js';
+import driversRouter from './routes/drivers.js';
 import ridersRouter from './routes/riders.js';
 import optimizeRouter from './routes/optimize.js';
 import consolidateRouter from './routes/consolidate.js';
 import statsRouter from './routes/stats.js';
+import settingsRouter from './routes/settings.js';
+import reportsRouter from './routes/reports.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -41,10 +44,13 @@ app.get('/health', (req, res) => {
 
 app.use('/api/upload', uploadRouter);
 app.use('/api/vehicles', vehiclesRouter);
+app.use('/api/drivers', driversRouter);
 app.use('/api/riders', ridersRouter);
 app.use('/api/optimize', optimizeRouter);
 app.use('/api/consolidate', consolidateRouter);
 app.use('/api/stats', statsRouter);
+app.use('/api/settings', settingsRouter);
+app.use('/api/reports', reportsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

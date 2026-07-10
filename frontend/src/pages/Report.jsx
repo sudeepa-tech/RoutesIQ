@@ -9,7 +9,7 @@ const THRESHOLDS = { under: 50, over: 95 };
 
 function statusFor(util) {
   if (util == null) return { label: 'Not routed', color: 'text-ink-muted', dot: 'bg-ink-faint' };
-  if (util > THRESHOLDS.over) return { label: 'Over capacity', color: 'text-coral', dot: 'bg-coral' };
+  if (util > THRESHOLDS.over) return { label: 'Full capacity', color: 'text-coral', dot: 'bg-coral' };
   if (util < THRESHOLDS.under) return { label: 'Under-utilized', color: 'text-amber', dot: 'bg-amber' };
   return { label: 'Optimal', color: 'text-teal', dot: 'bg-teal' };
 }
@@ -129,7 +129,7 @@ export default function Report() {
             accent={underCount > 0 ? 'amber' : 'ink'}
           />
           <StatCard
-            label="Over capacity (>95%)"
+            label="Full capacity (>95%)"
             value={overCount}
             icon={overCount > 0 ? AlertTriangle : CheckCircle2}
             accent={overCount > 0 ? 'coral' : 'teal'}

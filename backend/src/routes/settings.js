@@ -7,8 +7,11 @@ const router = Router();
 
 const settingsSchema = z.object({
   targetUtilizationPct: z.number().min(1).max(100).optional(),
-  routeStartTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  schoolArrivalTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  schoolDepartureTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   avgSpeedKmh: z.number().positive().optional(),
+  maxRideDurationMinutes: z.number().positive().optional(),
+  maxMergeDistanceKm: z.number().positive().optional(),
 });
 
 router.get('/', (req, res) => {

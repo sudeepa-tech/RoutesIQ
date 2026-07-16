@@ -37,7 +37,10 @@ export function haversineKm(a, b) {
 
 /** Pick k well-spread seed stops via farthest-point sampling. */
 function seedCentroids(stops, k) {
-  const seeds = [stops[Math.floor(Math.random() * stops.length)]];
+  // deterministic seed (not Math.random()) so the same input always
+  // produces the same clustering — makes results reproducible and
+  // parameter tuning (radius, utilization cap, etc.) actually meaningful
+  const seeds = [stops[0]];
   while (seeds.length < k) {
     let best = null;
     let bestDist = -Infinity;
@@ -61,11 +64,19 @@ function seedCentroids(stops, k) {
  *   get during clustering (default 100 = use full seat capacity). This
  *   NEVER exceeds the vehicle's real capacity — it only ever restricts
  *   further, e.g. 90 leaves a comfort/safety margin of empty seats.
+ * options.maxStopRadiusKm: caps how far a stop may be from a vehicle's
+ *   current centroid to be assigned to it (default 10km). Without this,
+ *   a large-capacity vehicle can end up greedily absorbing scattered,
+ *   far-flung single-rider stops just because it "has room" — producing
+ *   unrealistic 60km+ routes and pre-dawn pickup times. This keeps every
+ *   route geographically compact, the way a real school bus route is
+ *   planned, even if it means a vehicle doesn't fill to its target %.
  * returns: Map<vehicleId, stops[]>
  */
 export function clusterStops(stops, vehicles, options = {}) {
   const targetUtilizationPct = Math.min(100, Math.max(1, options.targetUtilizationPct ?? 100));
   const effectiveCapacity = (v) => Math.max(1, Math.floor(v.capacity * (targetUtilizationPct / 100)));
+  const maxStopRadiusKm = options.maxStopRadiusKm ?? 7;
 
   const sortedVehicles = [...vehicles].sort((a, b) => b.capacity - a.capacity);
   let centroids = seedCentroids(stops, sortedVehicles.length).slice();
@@ -83,13 +94,31 @@ export function clusterStops(stops, vehicles, options = {}) {
       const cap = remaining.get(v.id);
       if (cap < stop.headcount) return;
       const d = haversineKm(stop, centroids[idx]);
+      if (d > maxStopRadiusKm) return; // too far from this vehicle's current cluster — skip
       if (d < bestScore) {
         bestScore = d;
         bestVehicle = idx;
       }
     });
 
-    // fallback: if nobody has room under the *target* cap (shouldn't
+    // fallback 1: nobody within the compact radius had room — widen the
+    // search (up to 3x the radius) to any vehicle with capacity, picking
+    // the geographically closest. Still bounded, so one desperate stop
+    // can't force a 60km+ detour onto an otherwise-compact route.
+    if (bestVehicle === null) {
+      sortedVehicles.forEach((v, idx) => {
+        const cap = remaining.get(v.id);
+        if (cap < stop.headcount) return;
+        const d = haversineKm(stop, centroids[idx]);
+        if (d > maxStopRadiusKm * 3) return;
+        if (d < bestScore) {
+          bestScore = d;
+          bestVehicle = idx;
+        }
+      });
+    }
+
+    // fallback 2: if nobody has room under the *target* cap (shouldn't
     // happen if total effective capacity >= total headcount), fall back
     // to the vehicle with the most REAL remaining seats — this may push
     // that vehicle above the target utilization cap, but will still never
@@ -201,8 +230,11 @@ export function twoOpt(depot, route, maxIterations = 200) {
  * Returns per-vehicle route plans + fleet-level summary stats.
  * options.targetUtilizationPct: global cap on how full each vehicle may
  *   get (1-100, default 100). Never exceeds real seat capacity.
+ * options.maxStopRadiusKm: max distance a stop may be from a vehicle's
+ *   cluster centroid (default 10km) — keeps routes geographically
+ *   realistic instead of one bus sprawling across the whole city.
  */
-export function optimizeFleet({ stops, vehicles, depot, targetUtilizationPct = 100 }) {
+export function optimizeFleet({ stops, vehicles, depot, targetUtilizationPct = 100, maxStopRadiusKm = 7 }) {
   if (!stops.length) throw new Error('No stops supplied');
   if (!vehicles.length) throw new Error('No vehicles supplied');
 
@@ -220,7 +252,7 @@ export function optimizeFleet({ stops, vehicles, depot, targetUtilizationPct = 1
   // matches "don't leave capacity unused" — every rider gets a seat as
   // long as the real fleet capacity allows it.
 
-  const clusters = clusterStops(stops, vehicles, { targetUtilizationPct: cappedPct });
+  const clusters = clusterStops(stops, vehicles, { targetUtilizationPct: cappedPct, maxStopRadiusKm });
   const plans = [];
 
   for (const vehicle of vehicles) {

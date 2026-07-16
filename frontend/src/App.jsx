@@ -12,6 +12,7 @@ import ConsolidationReport from './pages/ConsolidationReport.jsx';
 import FleetManagement from './pages/FleetManagement.jsx';
 import ImpactedStudentsReport from './pages/ImpactedStudentsReport.jsx';
 import SuggestedMap from './pages/SuggestedMap.jsx';
+import RouteRoster from './pages/RouteRoster.jsx';
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
             <Route path="/fleet" element={<FleetManagement />} />
             <Route path="/impacted-students" element={<ImpactedStudentsReport />} />
             <Route path="/suggested-map" element={<SuggestedMap />} />
+            <Route path="/route-roster" element={<RouteRoster />} />
           </Routes>
         </div>
         <MobileNav />

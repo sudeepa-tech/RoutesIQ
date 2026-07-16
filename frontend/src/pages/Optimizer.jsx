@@ -88,6 +88,13 @@ export default function Optimizer() {
           </div>
         </div>
 
+        <div className="panel p-4 font-mono text-xs text-ink-muted">
+          🕐 Every route reaches campus at exactly <strong className="text-ink">07:15</strong> for pickup and
+          leaves at exactly <strong className="text-ink">14:20</strong> for drop. No pickup happens before{' '}
+          <strong className="text-ink">05:30</strong> (a max 105-minute ride) — routes are automatically
+          reshuffled to enforce this, moving stops between vehicles no more than <strong className="text-ink">12 km</strong> apart.
+        </div>
+
         {error && (
           <div className="bg-coral/10 border border-coral/40 text-coral text-sm px-4 py-3 rounded-lg font-mono">
             {error}
@@ -114,6 +121,19 @@ export default function Optimizer() {
               <div className="bg-amber/10 border border-amber/30 text-amber text-xs px-4 py-3 rounded-lg font-mono">
                 {summary.vehiclesOverTargetCap} vehicle(s) were filled to full capacity (above the {summary.targetUtilizationCapPct}% target)
                 because the target alone couldn't seat every rider — no vehicle ever exceeds its real seat capacity.
+              </div>
+            )}
+
+            {summary.routesStillOverRideDuration?.length > 0 && (
+              <div className="bg-coral/10 border border-coral/30 text-coral text-xs px-4 py-3 rounded-lg font-mono space-y-1">
+                <div>
+                  {summary.routesStillOverRideDuration.length} route(s) still need a pickup before 05:30 —
+                  the fleet was reshuffled to minimize this, but these routes have no geographically feasible
+                  vehicle (within the merge distance cap) to offload their farthest stop to:
+                </div>
+                <div className="text-ink-muted">
+                  {summary.routesStillOverRideDuration.map((r) => `${r.routeNo} (${r.worstDurationMinutes}m ride)`).join(', ')}
+                </div>
               </div>
             )}
 

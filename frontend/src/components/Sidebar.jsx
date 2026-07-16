@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutGrid, Route, Map, Sparkles, Users, BusFront, FileBarChart, PiggyBank, Settings2, UserCog, Waypoints } from 'lucide-react';
+import { LayoutGrid, Route, Map, Sparkles, Users, BusFront, FileBarChart, PiggyBank, Settings2, UserCog, Waypoints, ClipboardList } from 'lucide-react';
 
 const SECTIONS = [
   {
@@ -22,6 +22,7 @@ const SECTIONS = [
     label: 'Reports',
     items: [
       { to: '/report', label: 'Utilization Report', icon: FileBarChart },
+      { to: '/route-roster', label: 'Route Roster', icon: ClipboardList },
       { to: '/impacted-students', label: 'Impacted Students', icon: UserCog },
     ],
   },

@@ -23,8 +23,11 @@ let state = persisted ?? {
   uploadedAt: null,
   settings: {
     targetUtilizationPct: 100, // global cap; never exceeds real seat capacity regardless
-    routeStartTime: '07:00', // HH:MM, used for stop ETA calculations
-    avgSpeedKmh: 25,
+    schoolArrivalTime: '07:15', // every pickup route must reach campus at this time
+    schoolDepartureTime: '14:20', // every drop route leaves campus at this time
+    avgSpeedKmh: 28,
+    maxRideDurationMinutes: 105, // no pickup earlier than 05:30 given the fixed 07:15 arrival
+    maxMergeDistanceKm: 12, // hard cap — routes/stops never merge or reassign beyond this
   },
 };
 

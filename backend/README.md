@@ -34,7 +34,8 @@ npm run dev        # nodemon, http://localhost:4000
 | POST   | `/api/optimize`      | Run the optimizer (`targetUtilizationPct`, `depot`, `routeStartTime`, `avgSpeedKmh`) |
 | GET    | `/api/optimize/latest`| Last computed optimization result               |
 | POST   | `/api/consolidate`   | AI merge suggestions + ROI (needs `/api/optimize` run first) |
-| GET    | `/api/reports/impacted-students` | Riders whose vehicle changed due to consolidation, with new vehicle + ETA |
+| GET    | `/api/reports/impacted-students` | Riders whose vehicle changed due to consolidation, with old vs new pickup/drop times + duration |
+| GET    | `/api/reports/route-roster` | Full student/staff list per route (`?basis=current\|suggested`, optional `?routeNo=I-07`) |
 | GET    | `/api/stats`         | Dashboard summary                                |
 
 ## Optimization engine (`src/services/optimizer.js`)
@@ -51,6 +52,63 @@ npm run dev        # nodemon, http://localhost:4000
 Distances use the Haversine great-circle formula; no external maps API
 key is required for the optimization itself (only the frontend's map
 tiles need one, optionally).
+
+## Realistic fixed-schedule timing (`src/services/timing.js`)
+
+Every school bus must reach campus at the SAME fixed time (default
+`07:15`) and leave campus at the SAME fixed time (default `14:20`) —
+buses don't share a start time and arrive whenever.
+
+- **Pickup** (`computeArrivalSchedule`): works backward from the fixed
+  arrival time, so a route with more/farther stops simply starts
+  earlier. Each stop gets a `pickupTime` and `durationToSchoolMinutes`.
+- **Drop** (`computeDepartureSchedule`): works forward from the fixed
+  departure time, retracing the pickup route in reverse (the stop
+  closest to school — picked up last in the morning — is dropped off
+  first in the afternoon, mirroring how a bus physically retraces its
+  road path). Each stop gets a `dropTime` and `durationFromSchoolMinutes`.
+
+Both are planning estimates (straight-line distance ÷ average speed),
+not live-traffic ETAs.
+
+## Route compactness (`maxStopRadiusKm`)
+
+Pure capacity-based clustering can otherwise let a large-capacity vehicle
+greedily absorb scattered, far-flung single-rider stops just because it
+"has room" — producing unrealistic 60km+ routes and pre-dawn pickups.
+`clusterStops`/`optimizeFleet` accept `maxStopRadiusKm` (default 7km): a
+stop is only assigned to a vehicle whose current cluster centroid is
+within that radius, with a bounded (3x radius) fallback so no rider ever
+goes unseated. This keeps routes geographically realistic, sometimes at
+the cost of a vehicle not reaching its target utilization — which is
+exactly what the consolidation advisor's two-pass merge (below) then
+cleans up.
+
+## Maximum ride duration / earliest pickup (`src/services/rideDurationEnforcer.js`)
+
+No pickup should happen before `05:30` (equivalently: no student rides
+longer than `maxRideDurationMinutes`, default 105 — the gap between 05:30
+and the fixed 07:15 school arrival). This runs automatically after every
+`/api/optimize` call:
+
+1. Compute each route's pickup schedule; the farthest-in-time stop is
+   the one to check (pickup schedules are backward-from-arrival, so the
+   first stop always has the longest remaining ride).
+2. If it's over budget, find another vehicle within
+   `maxReassignDistanceKm` (default 12km, same hard cap as consolidation
+   merges) with seat room, preferring one whose own resulting duration
+   would also stay under the cap; if every nearby vehicle is already
+   loaded, falls back to whichever nearby move most reduces the current
+   worst-case duration, guaranteeing the fleet's total time-over-budget
+   keeps shrinking every move rather than oscillating.
+3. Move the stop, re-sequence both affected routes, and repeat until no
+   route violates the cap or no further improving move exists.
+
+Any stop that genuinely can't be reassigned within the distance/capacity
+constraints (rare — an isolated demand pocket farther than any spare
+vehicle could reach) is left in place and reported in
+`summary.routesStillOverRideDuration`, rather than silently violating the
+distance or capacity constraints to force a fix.
 
 ## Configurable utilization cap
 
@@ -73,14 +131,30 @@ live-traffic ETA.
 
 ## Consolidation advisor & ROI (`src/services/consolidationAdvisor.js`)
 
-Runs on top of an already-optimized plan. Sorts routes by utilization
-ascending and greedily groups nearby under-utilized routes together —
-pulling in a 2nd, 3rd, even 4th nearby route if needed — until the
-group's combined load lands in a genuine "full load" band (default
-90–100% of the largest vehicle in the group), then keeps that
-largest-capacity vehicle as the survivor and releases the rest. Merged
-stops are re-sequenced with the same nearest-neighbour + 2-opt logic
-used by the optimizer.
+Runs on top of an already-optimized plan, in TWO passes:
+
+1. **Full-load pass** — sorts routes by utilization ascending and
+   greedily groups nearby under-utilized routes together (pulling in a
+   2nd, 3rd, even 4th route if needed) until the combined load lands in
+   a genuine full-load band (default 90–100%).
+2. **Mop-up pass** — anything still below `utilizationThreshold` (default
+   70%) after pass 1 gets a second, more lenient attempt: same grouping
+   logic, but only requiring the combined load reach the 70% threshold
+   (not the full 90%+ band), searched over a wider radius (1.75x). This
+   guarantees "no vehicle left under 70% if a geographically reasonable
+   merge exists" — the response's `metrics.vehiclesStillUnderThreshold`
+   lists any vehicle that remains under threshold because no feasible
+   merge was found nearby even after both passes.
+
+Every merge is checked against the pickup-time floor too — a merge is
+never proposed if it would push any student's pickup earlier than
+`maxRideDurationMinutes` allows (both while growing the candidate group
+and as a final safety check on the committed route), since combining
+routes only ever adds stops and can otherwise easily create a pickup
+earlier than any single original route had.
+
+Each merge keeps the group's largest-capacity vehicle as the survivor and
+releases the rest.
 
 `POST /api/consolidate` body params (all optional):
 - `utilizationThreshold` (default 70) — routes below this % are merge candidates

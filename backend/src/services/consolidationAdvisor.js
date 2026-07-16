@@ -7,34 +7,144 @@
  * full bus" idea, generalized to N routes when a single pairwise merge
  * can't reach a truly full load.
  *
- * Heuristic (greedy nearest-centroid grouping):
- *   1. Sort routes by utilization, ascending (emptiest buses first).
- *   2. Seed a group with the emptiest route. Repeatedly pull in the
- *      geographically closest still-active route (within
- *      `maxMergeDistanceKm` of the group's current centroid) whose riders
- *      still fit in the largest-capacity vehicle seen in the group so far.
- *   3. Stop growing the group once its combined utilization (against the
- *      largest vehicle in the group) lands in the "near-full" band —
- *      >= `minCombinedUtilization` (default 90%) and <= 100%.
- *   4. If the band is reached, keep the group's largest-capacity vehicle
- *      as the survivor, re-sequence its stops (nearest-neighbour + 2-opt)
- *      over ALL the group's stops, and release every other vehicle in the
- *      group. If the band can't be reached (no more nearby routes to add),
- *      the seed route is left alone and the next-emptiest route is tried.
+ * Heuristic (greedy nearest-centroid grouping, TWO passes):
+ *   Pass 1 (full-load): sort routes by utilization ascending. Seed a group
+ *     with the emptiest route, repeatedly pull in the geographically
+ *     closest still-active route (within `maxMergeDistanceKm`) whose
+ *     riders still fit in the largest-capacity vehicle seen in the group
+ *     so far, until the combined load lands in the "near-full" band
+ *     (>= `minCombinedUtilization`, default 90%, and <= 100%).
+ *   Pass 2 (mop-up): any route STILL below `utilizationThreshold` (default
+ *     70%) after pass 1 — because it had no full-load-band combination
+ *     nearby — gets a second, more lenient attempt: same grouping logic
+ *     and the SAME distance cap (`maxMergeDistanceKm` is a hard ceiling,
+ *     never widened), but only requiring the combined load reach
+ *     `utilizationThreshold` (not the full 90%+ band). This means "no
+ *     vehicle left under 70% if a geographically reasonable (<= the
+ *     configured distance cap) merge exists" — pass 1 prefers truly full
+ *     buses, pass 2 makes sure nothing is left badly under-utilized just
+ *     because it couldn't reach "full", without ever merging routes
+ *     farther apart than the configured cap.
+ *
+ * Every accepted merge keeps the group's largest-capacity vehicle as the
+ * survivor, re-sequences its stops (nearest-neighbour + 2-opt) over ALL
+ * the group's stops, and releases every other vehicle in the group.
  *
  * This is a heuristic, not a guaranteed-optimal bin packing — but it's
- * fast, explainable, respects geography, and — unlike a pure pairwise
- * merge — can actually land in a tight utilization band by pulling in a
- * third or fourth nearby route when two alone don't add up to "full".
+ * fast, explainable, and respects geography.
  */
 
 import { haversineKm, nearestNeighbourOrder, twoOpt } from './optimizer.js';
+import { computeArrivalSchedule } from './timing.js';
 
 function centroidOf(stops) {
   if (!stops.length) return null;
   const lat = stops.reduce((s, p) => s + p.lat, 0) / stops.length;
   const lng = stops.reduce((s, p) => s + p.lng, 0) / stops.length;
   return { lat, lng };
+}
+
+/**
+ * Runs one grouping pass over `active` routes, mutating it in place
+ * (marking merged-away routes `released`) and pushing accepted merges
+ * into `suggestions`. Routes that can't reach `bandTarget` within
+ * `distanceLimit` are added to `givenUp` so they aren't retried forever
+ * within this pass (a later pass with different parameters can still
+ * retry them, since `givenUp` is passed in fresh per call).
+ */
+function runMergePass({ active, depot, utilizationThreshold, bandTarget, distanceLimit, suggestions, givenUp, schoolArrivalTime, avgSpeedKmh, maxRideDurationMinutes }) {
+  let progress = true;
+  while (progress) {
+    progress = false;
+
+    const sources = active
+      .filter((r) => !r.released && !givenUp.has(r.routeNo))
+      .filter((r) => (r.riders / r.vehicle.capacity) * 100 < utilizationThreshold)
+      .sort((a, b) => a.riders / a.vehicle.capacity - b.riders / b.vehicle.capacity);
+
+    if (!sources.length) break;
+    const seed = sources[0];
+
+    const group = [seed];
+    let groupRiders = seed.riders;
+    const survivorCapacity = () => Math.max(...group.map((r) => r.vehicle.capacity));
+
+    while ((groupRiders / survivorCapacity()) * 100 < bandTarget) {
+      const centroid = centroidOf(group.flatMap((r) => r.stops));
+      let best = null;
+      let bestDist = Infinity;
+      for (const cand of active) {
+        if (cand.released || group.includes(cand)) continue;
+        const newRiders = groupRiders + cand.riders;
+        const newCapacity = Math.max(survivorCapacity(), cand.vehicle.capacity);
+        if (newRiders > newCapacity) continue;
+        const d = haversineKm(centroid, centroidOf(cand.stops));
+        if (d > distanceLimit || d >= bestDist) continue;
+
+        // don't grow the group past the pickup-time floor — merging must
+        // never push a student's pickup earlier than the fleet-wide cap
+        const simStops = nearestNeighbourOrder(depot, [...group.flatMap((r) => r.stops), ...cand.stops]);
+        const simTiming = computeArrivalSchedule(depot, simStops, { arrivalTime: schoolArrivalTime, avgSpeedKmh });
+        if (simTiming.timings[0] && simTiming.timings[0].durationToSchoolMinutes > maxRideDurationMinutes) continue;
+
+        bestDist = d;
+        best = cand;
+      }
+      if (!best) break;
+      group.push(best);
+      groupRiders += best.riders;
+    }
+
+    const finalUtil = (groupRiders / survivorCapacity()) * 100;
+
+    if (group.length > 1 && finalUtil >= bandTarget && finalUtil <= 100 + 1e-6) {
+      const survivor = group.reduce((a, b) => (a.vehicle.capacity >= b.vehicle.capacity ? a : b));
+      const others = group.filter((r) => r !== survivor);
+      const combinedStops = group.flatMap((r) => r.stops.map((s) => ({ ...s, originRouteNo: r.routeNo })));
+      const nn = nearestNeighbourOrder(depot, combinedStops);
+      const { route, distance } = twoOpt(depot, nn);
+
+      // final safety check: 2-opt only ever shortens the route, so this
+      // should already hold given the growth-time checks above, but
+      // verify before committing rather than assume
+      const finalTiming = computeArrivalSchedule(depot, route, { arrivalTime: schoolArrivalTime, avgSpeedKmh });
+      if (finalTiming.timings[0] && finalTiming.timings[0].durationToSchoolMinutes > maxRideDurationMinutes) {
+        givenUp.add(seed.routeNo);
+        progress = true;
+        continue;
+      }
+
+      suggestions.push({
+        mergedRoutes: group.map((r) => r.routeNo),
+        intoRoute: survivor.routeNo,
+        intoVehicle: survivor.vehicle.vehicleNo,
+        freedVehicles: others.map((r) => ({
+          routeNo: r.routeNo,
+          vehicleNo: r.vehicle.vehicleNo,
+          capacity: r.vehicle.capacity,
+          priorUtilizationPct: Number(((r.riders / r.vehicle.capacity) * 100).toFixed(1)),
+        })),
+        combinedRiders: groupRiders,
+        combinedUtilizationPct: Number(finalUtil.toFixed(1)),
+        distanceBeforeKm: Number(group.reduce((s, r) => s + r.distanceKm, 0).toFixed(2)),
+        distanceAfterKm: Number(distance.toFixed(2)),
+        orderedStops: route,
+      });
+
+      survivor.stops = route;
+      survivor.riders = groupRiders;
+      survivor.distanceKm = Number(distance.toFixed(2));
+      for (const o of others) {
+        o.released = true;
+        o.stops = [];
+        o.riders = 0;
+      }
+      progress = true;
+    } else {
+      givenUp.add(seed.routeNo);
+      progress = true;
+    }
+  }
 }
 
 /**
@@ -46,6 +156,9 @@ export function suggestConsolidation(plans, depot, options = {}) {
   const utilizationThreshold = options.utilizationThreshold ?? 70;
   const maxMergeDistanceKm = options.maxMergeDistanceKm ?? 12;
   const minCombinedUtilization = options.minCombinedUtilization ?? 90;
+  const schoolArrivalTime = options.schoolArrivalTime ?? '07:15';
+  const avgSpeedKmh = options.avgSpeedKmh ?? 28;
+  const maxRideDurationMinutes = options.maxRideDurationMinutes ?? 105;
 
   const active = plans
     .filter((p) => p.stops.length > 0)
@@ -62,95 +175,30 @@ export function suggestConsolidation(plans, depot, options = {}) {
   const suggestions = [];
   const originalTotalDistance = active.reduce((s, r) => s + r.distanceKm, 0);
   const originalVehicleCount = active.length;
-  const givenUp = new Set(); // routeNos we've already tried and couldn't reach the band
 
-  let progress = true;
-  while (progress) {
-    progress = false;
+  // Pass 1: chase the full-load band
+  runMergePass({
+    active, depot, utilizationThreshold, bandTarget: minCombinedUtilization,
+    distanceLimit: maxMergeDistanceKm, suggestions, givenUp: new Set(),
+    schoolArrivalTime, avgSpeedKmh, maxRideDurationMinutes,
+  });
 
-    const sources = active
-      .filter((r) => !r.released && !givenUp.has(r.routeNo))
-      .filter((r) => (r.riders / r.vehicle.capacity) * 100 < utilizationThreshold)
-      .sort((a, b) => a.riders / a.vehicle.capacity - b.riders / b.vehicle.capacity);
-
-    if (!sources.length) break;
-    const seed = sources[0];
-
-    // grow a group starting from the seed, pulling in the nearest feasible
-    // route each step, until the combined load lands in the full-load band
-    const group = [seed];
-    let groupRiders = seed.riders;
-    const survivorCapacity = () => Math.max(...group.map((r) => r.vehicle.capacity));
-
-    while ((groupRiders / survivorCapacity()) * 100 < minCombinedUtilization) {
-      const centroid = centroidOf(group.flatMap((r) => r.stops));
-      let best = null;
-      let bestDist = Infinity;
-      for (const cand of active) {
-        if (cand.released || group.includes(cand)) continue;
-        const newRiders = groupRiders + cand.riders;
-        const newCapacity = Math.max(survivorCapacity(), cand.vehicle.capacity);
-        if (newRiders > newCapacity) continue; // wouldn't fit even in the bigger vehicle
-        const d = haversineKm(centroid, centroidOf(cand.stops));
-        if (d <= maxMergeDistanceKm && d < bestDist) {
-          bestDist = d;
-          best = cand;
-        }
-      }
-      if (!best) break; // nothing nearby left that fits
-      group.push(best);
-      groupRiders += best.riders;
-    }
-
-    const finalUtil = (groupRiders / survivorCapacity()) * 100;
-
-    if (group.length > 1 && finalUtil >= minCombinedUtilization && finalUtil <= 100 + 1e-6) {
-      const survivor = group.reduce((a, b) => (a.vehicle.capacity >= b.vehicle.capacity ? a : b));
-      const others = group.filter((r) => r !== survivor);
-      // tag every stop with which route it originally belonged to, so
-      // downstream reporting can tell "impacted" riders (moved to a new
-      // vehicle) apart from the survivor's own original riders
-      const combinedStops = group.flatMap((r) => r.stops.map((s) => ({ ...s, originRouteNo: r.routeNo })));
-      const nn = nearestNeighbourOrder(depot, combinedStops);
-      const { route, distance } = twoOpt(depot, nn);
-
-      suggestions.push({
-        mergedRoutes: group.map((r) => r.routeNo),
-        intoRoute: survivor.routeNo,
-        intoVehicle: survivor.vehicle.vehicleNo,
-        freedVehicles: others.map((r) => ({
-          routeNo: r.routeNo,
-          vehicleNo: r.vehicle.vehicleNo,
-          capacity: r.vehicle.capacity,
-          priorUtilizationPct: Number(((r.riders / r.vehicle.capacity) * 100).toFixed(1)),
-        })),
-        combinedRiders: groupRiders,
-        combinedUtilizationPct: Number(finalUtil.toFixed(1)),
-        distanceBeforeKm: Number(group.reduce((s, r) => s + r.distanceKm, 0).toFixed(2)),
-        distanceAfterKm: Number(distance.toFixed(2)),
-        orderedStops: route, // final sequenced stops on the survivor, each tagged with originRouteNo
-      });
-
-      survivor.stops = route;
-      survivor.riders = groupRiders;
-      survivor.distanceKm = Number(distance.toFixed(2));
-      for (const o of others) {
-        o.released = true;
-        o.stops = [];
-        o.riders = 0;
-      }
-      progress = true;
-    } else {
-      // couldn't reach the full-load band with what's nearby — leave this
-      // route as-is and try the next-emptiest one instead
-      givenUp.add(seed.routeNo);
-      progress = true;
-    }
-  }
+  // Pass 2: mop up anything still under the threshold with a relaxed
+  // target — but the SAME hard distance cap. "Merge will not happen
+  // more than maxMergeDistanceKm apart" is a hard constraint, not a
+  // suggestion, so pass 2 never searches farther than pass 1 did.
+  runMergePass({
+    active, depot, utilizationThreshold, bandTarget: utilizationThreshold,
+    distanceLimit: maxMergeDistanceKm, suggestions, givenUp: new Set(),
+    schoolArrivalTime, avgSpeedKmh, maxRideDurationMinutes,
+  });
 
   const releasedVehicles = active.filter((r) => r.released);
   const remainingRoutes = active.filter((r) => !r.released);
   const newTotalDistance = remainingRoutes.reduce((s, r) => s + r.distanceKm, 0);
+  const stillUnderThreshold = remainingRoutes.filter(
+    (r) => (r.riders / r.vehicle.capacity) * 100 < utilizationThreshold
+  );
 
   return {
     suggestions,
@@ -166,6 +214,11 @@ export function suggestConsolidation(plans, depot, options = {}) {
       originalTotalDistanceKm: Number(originalTotalDistance.toFixed(2)),
       newTotalDistanceKm: Number(newTotalDistance.toFixed(2)),
       distanceDeltaKm: Number((newTotalDistance - originalTotalDistance).toFixed(2)),
+      vehiclesStillUnderThreshold: stillUnderThreshold.map((r) => ({
+        routeNo: r.routeNo,
+        vehicleNo: r.vehicle.vehicleNo,
+        utilizationPct: Number(((r.riders / r.vehicle.capacity) * 100).toFixed(1)),
+      })),
     },
   };
 }

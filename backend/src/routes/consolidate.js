@@ -43,7 +43,7 @@ router.post('/', (req, res, next) => {
     const schoolArrivalTime = opts.schoolArrivalTime ?? settings.schoolArrivalTime ?? '07:15';
     const schoolDepartureTime = opts.schoolDepartureTime ?? settings.schoolDepartureTime ?? '14:20';
     const avgSpeedKmh = opts.avgSpeedKmh ?? settings.avgSpeedKmh ?? 28;
-    const maxRideDurationMinutes = opts.maxRideDurationMinutes ?? settings.maxRideDurationMinutes ?? 105;
+    const maxRideDurationMinutes = opts.maxRideDurationMinutes ?? settings.maxRideDurationMinutes ?? 165;
 
     // the merge search itself now enforces the pickup-time floor — a
     // merge is never proposed if it would push any student's pickup

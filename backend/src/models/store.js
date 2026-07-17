@@ -26,7 +26,7 @@ let state = persisted ?? {
     schoolArrivalTime: '07:15', // every pickup route must reach campus at this time
     schoolDepartureTime: '14:20', // every drop route leaves campus at this time
     avgSpeedKmh: 28,
-    maxRideDurationMinutes: 105, // no pickup earlier than 05:30 given the fixed 07:15 arrival
+    maxRideDurationMinutes: 165, // no pickup earlier than 04:30 given the fixed 07:15 arrival
     maxMergeDistanceKm: 12, // hard cap — routes/stops never merge or reassign beyond this
   },
 };

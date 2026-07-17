@@ -40,7 +40,7 @@ router.post('/', (req, res, next) => {
     const schoolArrivalTime = parsed.data.schoolArrivalTime ?? settings.schoolArrivalTime ?? '07:15';
     const schoolDepartureTime = parsed.data.schoolDepartureTime ?? settings.schoolDepartureTime ?? '14:20';
     const avgSpeedKmh = parsed.data.avgSpeedKmh ?? settings.avgSpeedKmh ?? 28;
-    const maxRideDurationMinutes = parsed.data.maxRideDurationMinutes ?? settings.maxRideDurationMinutes ?? 105;
+    const maxRideDurationMinutes = parsed.data.maxRideDurationMinutes ?? settings.maxRideDurationMinutes ?? 165;
     const maxReassignDistanceKm = parsed.data.maxReassignDistanceKm ?? settings.maxMergeDistanceKm ?? 12;
 
     const { vehicles, stops } = store.getDataset();

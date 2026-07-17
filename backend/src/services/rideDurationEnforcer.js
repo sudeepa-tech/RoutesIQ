@@ -1,8 +1,8 @@
 /**
  * Ride Duration Enforcer
  * ------------------------------------------------
- * No student should spend more than `maxDurationMinutes` (default 105 —
- * i.e. pickup no earlier than 05:30 given a fixed 07:15 school arrival) on
+ * No student should spend more than `maxDurationMinutes` (default 165 —
+ * i.e. pickup no earlier than 04:30 given a fixed 07:15 school arrival) on
  * the bus. Clustering by capacity and geography alone doesn't guarantee
  * this — a route can still end up needing a very early pickup for its
  * farthest stop if it accumulated too many stops or too wide a spread.
@@ -52,11 +52,11 @@ function resequence(plan, depot) {
 
 /**
  * plans: optimizeFleet().plans (mutated in place and also returned)
- * options: { maxDurationMinutes (default 105), schoolArrivalTime (default '07:15'),
+ * options: { maxDurationMinutes (default 165), schoolArrivalTime (default '07:15'),
  *            avgSpeedKmh (default 28), maxReassignDistanceKm (default 12) }
  */
 export function enforceMaxRideDuration(plans, depot, options = {}) {
-  const maxDurationMinutes = options.maxDurationMinutes ?? 105;
+  const maxDurationMinutes = options.maxDurationMinutes ?? 165;
   const schoolArrivalTime = options.schoolArrivalTime ?? '07:15';
   const avgSpeedKmh = options.avgSpeedKmh ?? 28;
   const maxReassignDistanceKm = options.maxReassignDistanceKm ?? 12;

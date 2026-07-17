@@ -91,7 +91,7 @@ export default function Optimizer() {
         <div className="panel p-4 font-mono text-xs text-ink-muted">
           🕐 Every route reaches campus at exactly <strong className="text-ink">07:15</strong> for pickup and
           leaves at exactly <strong className="text-ink">14:20</strong> for drop. No pickup happens before{' '}
-          <strong className="text-ink">05:30</strong> (a max 105-minute ride) — routes are automatically
+          <strong className="text-ink">04:30</strong> (a max 165-minute ride) — routes are automatically
           reshuffled to enforce this, moving stops between vehicles no more than <strong className="text-ink">12 km</strong> apart.
         </div>
 
@@ -127,7 +127,7 @@ export default function Optimizer() {
             {summary.routesStillOverRideDuration?.length > 0 && (
               <div className="bg-coral/10 border border-coral/30 text-coral text-xs px-4 py-3 rounded-lg font-mono space-y-1">
                 <div>
-                  {summary.routesStillOverRideDuration.length} route(s) still need a pickup before 05:30 —
+                  {summary.routesStillOverRideDuration.length} route(s) still need a pickup before 04:30 —
                   the fleet was reshuffled to minimize this, but these routes have no geographically feasible
                   vehicle (within the merge distance cap) to offload their farthest stop to:
                 </div>

@@ -86,8 +86,8 @@ cleans up.
 
 ## Maximum ride duration / earliest pickup (`src/services/rideDurationEnforcer.js`)
 
-No pickup should happen before `05:30` (equivalently: no student rides
-longer than `maxRideDurationMinutes`, default 105 — the gap between 05:30
+No pickup should happen before `04:30` (equivalently: no student rides
+longer than `maxRideDurationMinutes`, default 165 — the gap between 04:30
 and the fixed 07:15 school arrival). This runs automatically after every
 `/api/optimize` call:
 

@@ -158,7 +158,7 @@ export function suggestConsolidation(plans, depot, options = {}) {
   const minCombinedUtilization = options.minCombinedUtilization ?? 90;
   const schoolArrivalTime = options.schoolArrivalTime ?? '07:15';
   const avgSpeedKmh = options.avgSpeedKmh ?? 28;
-  const maxRideDurationMinutes = options.maxRideDurationMinutes ?? 105;
+  const maxRideDurationMinutes = options.maxRideDurationMinutes ?? 165;
 
   const active = plans
     .filter((p) => p.stops.length > 0)

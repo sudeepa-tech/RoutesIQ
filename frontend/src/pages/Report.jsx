@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Download, ArrowUpDown, AlertTriangle, CheckCircle2, TrendingDown } from 'lucide-react';
+import { useEffect, useMemo, useState, Fragment } from 'react';
+import { Download, ArrowUpDown, AlertTriangle, CheckCircle2, TrendingDown, ChevronDown, ChevronRight } from 'lucide-react';
 import Topbar from '../components/Topbar.jsx';
 import StatCard from '../components/StatCard.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { useTransportData } from '../hooks/useTransportData.jsx';
+import api from '../services/api.js';
 
 const THRESHOLDS = { under: 50, over: 95 };
 
@@ -18,11 +19,28 @@ export default function Report() {
   const { stats, vehicles, optimization, refreshStats, refreshVehiclesAndStops } = useTransportData();
   const [sortKey, setSortKey] = useState('utilization');
   const [sortDir, setSortDir] = useState('desc');
+  const [rosterByRoute, setRosterByRoute] = useState({});
+  const [expandedRoute, setExpandedRoute] = useState(null);
+  const [rosterLoading, setRosterLoading] = useState(false);
 
   useEffect(() => {
     refreshStats().catch(() => {});
     refreshVehiclesAndStops().catch(() => {});
   }, [refreshStats, refreshVehiclesAndStops]);
+
+  useEffect(() => {
+    if (!stats?.datasetLoaded || !optimization) return;
+    setRosterLoading(true);
+    api
+      .getRouteRoster('current')
+      .then((data) => {
+        const map = {};
+        for (const r of data.routes) map[r.routeNo] = r.roster;
+        setRosterByRoute(map);
+      })
+      .catch(() => {})
+      .finally(() => setRosterLoading(false));
+  }, [stats?.datasetLoaded, optimization]);
 
   const rows = useMemo(() => {
     const plans = optimization?.plans;
@@ -101,8 +119,8 @@ export default function Report() {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <p className="text-sm text-ink-muted max-w-xl">
             {optimization
-              ? 'Utilization reflects riders assigned by the last optimization run.'
-              : 'Showing seat capacity only — run the optimizer to populate rider counts and utilization.'}
+              ? 'Utilization reflects riders assigned by the last optimization run. Click a route to see every student and staff member on it.'
+              : 'Showing seat capacity only — run the optimizer to populate rider counts, utilization, and rosters.'}
           </p>
           <button
             onClick={exportCsv}
@@ -140,6 +158,7 @@ export default function Report() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-ink-muted text-xs uppercase tracking-wider">
+                <th className="px-4 py-3 font-medium w-8"></th>
                 <SortableTh label="Route" active={sortKey === 'routeNo'} dir={sortDir} onClick={() => toggleSort('routeNo')} />
                 <th className="px-4 py-3 font-medium">Vehicle</th>
                 <th className="px-4 py-3 font-medium">Start point</th>
@@ -152,35 +171,89 @@ export default function Report() {
             <tbody>
               {rows.map((r) => {
                 const status = statusFor(r.utilization);
+                const isExpanded = expandedRoute === r.routeNo;
+                const roster = rosterByRoute[r.routeNo];
                 return (
-                  <tr key={r.routeNo} className="border-b border-border/60 last:border-0 hover:bg-panel2/40 transition-colors">
-                    <td className="px-4 py-2.5">
-                      <span className="route-chip border-amber/30 text-amber bg-amber/10">{r.routeNo}</span>
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-ink-muted">{r.vehicleNo}</td>
-                    <td className="px-4 py-2.5 text-ink-muted">{r.startPoint}</td>
-                    <td className="px-4 py-2.5 text-right font-mono">{r.capacity}</td>
-                    <td className="px-4 py-2.5 text-right font-mono">{r.riders ?? '—'}</td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="w-24 h-1.5 bg-panel2 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full ${status.dot}`}
-                            style={{ width: `${Math.min(100, r.utilization ?? 0)}%` }}
-                          />
+                  <Fragment key={r.routeNo}>
+                    <tr
+                      onClick={() => optimization && setExpandedRoute(isExpanded ? null : r.routeNo)}
+                      className={`border-b border-border/60 last:border-0 hover:bg-panel2/40 transition-colors ${
+                        optimization ? 'cursor-pointer' : ''
+                      }`}
+                    >
+                      <td className="px-4 py-2.5 text-ink-faint">
+                        {optimization && (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className="route-chip border-amber/30 text-amber bg-amber/10">{r.routeNo}</span>
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-ink-muted">{r.vehicleNo}</td>
+                      <td className="px-4 py-2.5 text-ink-muted">{r.startPoint}</td>
+                      <td className="px-4 py-2.5 text-right font-mono">{r.capacity}</td>
+                      <td className="px-4 py-2.5 text-right font-mono">{r.riders ?? '—'}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="w-24 h-1.5 bg-panel2 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full ${status.dot}`}
+                              style={{ width: `${Math.min(100, r.utilization ?? 0)}%` }}
+                            />
+                          </div>
+                          <span className="font-mono text-xs w-10 text-right">
+                            {r.utilization != null ? `${r.utilization}%` : '—'}
+                          </span>
                         </div>
-                        <span className="font-mono text-xs w-10 text-right">
-                          {r.utilization != null ? `${r.utilization}%` : '—'}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`flex items-center gap-1.5 text-xs font-medium ${status.color}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+                          {status.label}
                         </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className={`flex items-center gap-1.5 text-xs font-medium ${status.color}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
-                        {status.label}
-                      </span>
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr key={`${r.routeNo}-roster`} className="border-b border-border/60 last:border-0">
+                        <td colSpan={8} className="px-4 py-3 bg-panel2/30">
+                          {rosterLoading && !roster ? (
+                            <div className="text-xs text-ink-muted py-2">Loading roster…</div>
+                          ) : roster && roster.length ? (
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-left text-ink-muted uppercase tracking-wider">
+                                  <th className="py-1.5 pr-4 font-medium">Name</th>
+                                  <th className="py-1.5 pr-4 font-medium">Class / Role</th>
+                                  <th className="py-1.5 pr-4 font-medium">Type</th>
+                                  <th className="py-1.5 pr-4 font-medium">Pick stop</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {roster.map((s) => (
+                                  <tr key={s.studentId} className="border-t border-border/40">
+                                    <td className="py-1.5 pr-4">{s.name}</td>
+                                    <td className="py-1.5 pr-4 font-mono text-ink-muted">{s.classOrDesignation}</td>
+                                    <td className="py-1.5 pr-4">
+                                      <span
+                                        className={`route-chip ${
+                                          s.userType === 'Student'
+                                            ? 'border-amber/30 text-amber bg-amber/10'
+                                            : 'border-teal/30 text-teal bg-teal/10'
+                                        }`}
+                                      >
+                                        {s.userType}
+                                      </span>
+                                    </td>
+                                    <td className="py-1.5 pr-4 text-ink-muted">{s.pickStop}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <div className="text-xs text-ink-muted py-2">No riders on this route.</div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

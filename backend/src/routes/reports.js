@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { store } from '../models/store.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import routeRosterRouter from './routeRoster.js';
+import finalFleetRouter from './finalFleet.js';
 
 const router = Router();
 router.use(routeRosterRouter);
+router.use(finalFleetRouter);
 
 /**
  * GET /api/reports/impacted-students

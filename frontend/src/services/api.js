@@ -45,6 +45,7 @@ export const api = {
   runConsolidation: (params) => client.post('/consolidate', params || {}).then((r) => r.data),
   getImpactedStudents: () => client.get('/reports/impacted-students').then((r) => r.data),
   getRouteRoster: (basis) => client.get('/reports/route-roster', { params: { basis } }).then((r) => r.data),
+  getFinalFleet: () => client.get('/reports/final-fleet').then((r) => r.data),
 };
 
 export default api;

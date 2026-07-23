@@ -11,7 +11,9 @@ const settingsSchema = z.object({
   schoolDepartureTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   avgSpeedKmh: z.number().positive().optional(),
   maxRideDurationMinutes: z.number().positive().optional(),
+  earliestPickupTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   maxMergeDistanceKm: z.number().positive().optional(),
+  newVehicleCapacity: z.number().positive().optional(),
 });
 
 router.get('/', (req, res) => {

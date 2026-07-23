@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Sparkles, Loader2, TrendingDown, BusFront, Users, Gauge } from 'lucide-react';
+import { Sparkles, Loader2, TrendingDown, BusFront, Users, Gauge, ChevronDown, ChevronRight, Download, PlusCircle } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import Topbar from '../components/Topbar.jsx';
 import StatCard from '../components/StatCard.jsx';
 import RouteTable from '../components/RouteTable.jsx';
@@ -10,6 +11,7 @@ export default function Optimizer() {
   const { stats, optimization, runOptimization, loading, refreshStats, error } = useTransportData();
   const [phase, setPhase] = useState('idle'); // idle | clustering | sequencing | done
   const [targetUtilizationPct, setTargetUtilizationPct] = useState(100);
+  const [expandedNewRoute, setExpandedNewRoute] = useState(null);
 
   useEffect(() => {
     refreshStats().catch(() => {});
@@ -38,6 +40,34 @@ export default function Optimizer() {
   }
 
   const summary = optimization?.summary;
+  const newRoutes = summary?.suggestedNewRoutes ?? [];
+
+  const exportNewRoutesXlsx = () => {
+    const rows = [];
+    for (const nr of newRoutes) {
+      for (const s of nr.roster) {
+        rows.push({
+          'Suggested Route': nr.suggestedRouteNo,
+          'Suggested Capacity': nr.suggestedCapacity,
+          'Riders': nr.riders,
+          'Suggested Start Time': nr.routeStartTime,
+          'Meets Constraint': nr.meetsConstraint ? 'Yes' : 'No — needs earlier start',
+          'Student': s.name,
+          'Class/Role': s.classOrDesignation,
+          'Type': s.userType,
+          'Pick Stop': s.pickStop,
+        });
+      }
+    }
+    if (!rows.length) return;
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = Object.keys(rows[0]).map((key) => ({
+      wch: Math.max(key.length, ...rows.map((r) => String(r[key] ?? '').length)) + 2,
+    }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Suggested New Routes');
+    XLSX.writeFile(workbook, `suggested-new-routes-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
@@ -91,8 +121,11 @@ export default function Optimizer() {
         <div className="panel p-4 font-mono text-xs text-ink-muted">
           🕐 Every route reaches campus at exactly <strong className="text-ink">07:15</strong> for pickup and
           leaves at exactly <strong className="text-ink">14:20</strong> for drop. No pickup happens before{' '}
-          <strong className="text-ink">04:30</strong> (a max 165-minute ride) — routes are automatically
-          reshuffled to enforce this, moving stops between vehicles no more than <strong className="text-ink">12 km</strong> apart.
+          <strong className="text-ink">06:00</strong>, and no student rides longer than{' '}
+          <strong className="text-ink">80 minutes</strong> (the stricter of the two wins — currently{' '}
+          {summary ? <strong className="text-ink">{summary.maxRideDurationMinutes} min</strong> : '75 min'}). Existing
+          routes are reshuffled first (moving stops up to <strong className="text-ink">12 km</strong> apart); anything
+          that still can't be placed is proposed as a brand-new route below.
         </div>
 
         {error && (
@@ -124,15 +157,85 @@ export default function Optimizer() {
               </div>
             )}
 
-            {summary.routesStillOverRideDuration?.length > 0 && (
-              <div className="bg-coral/10 border border-coral/30 text-coral text-xs px-4 py-3 rounded-lg font-mono space-y-1">
-                <div>
-                  {summary.routesStillOverRideDuration.length} route(s) still need a pickup before 04:30 —
-                  the fleet was reshuffled to minimize this, but these routes have no geographically feasible
-                  vehicle (within the merge distance cap) to offload their farthest stop to:
+            {newRoutes.length > 0 && (
+              <div className="panel p-5 border-amber/30">
+                <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+                  <div className="flex items-center gap-2">
+                    <PlusCircle size={16} className="text-amber" />
+                    <h3 className="font-display font-medium text-sm">
+                      {newRoutes.length} new vehicle{newRoutes.length > 1 ? 's' : ''} needed
+                    </h3>
+                  </div>
+                  <button
+                    onClick={exportNewRoutesXlsx}
+                    className="flex items-center gap-2 text-xs font-medium bg-panel2 border border-border px-3 py-1.5 rounded-lg hover:bg-panel transition"
+                  >
+                    <Download size={13} />
+                    Export .xlsx
+                  </button>
                 </div>
-                <div className="text-ink-muted">
-                  {summary.routesStillOverRideDuration.map((r) => `${r.routeNo} (${r.worstDurationMinutes}m ride)`).join(', ')}
+                <p className="text-xs text-ink-muted mb-4 max-w-2xl">
+                  These riders couldn't be placed on any existing vehicle within the 06:00 / 80-minute
+                  constraint, even after reshuffling. Each card below is a proposed new route — click to
+                  see the full student/staff list and suggested pickup schedule.
+                </p>
+                <div className="space-y-2">
+                  {newRoutes.map((nr) => {
+                    const isExpanded = expandedNewRoute === nr.suggestedRouteNo;
+                    return (
+                      <div key={nr.suggestedRouteNo} className="border border-border rounded-lg overflow-hidden">
+                        <button
+                          onClick={() => setExpandedNewRoute(isExpanded ? null : nr.suggestedRouteNo)}
+                          className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-panel2/40 transition"
+                        >
+                          <div className="flex items-center gap-3">
+                            {isExpanded ? <ChevronDown size={14} className="text-ink-faint" /> : <ChevronRight size={14} className="text-ink-faint" />}
+                            <span className="route-chip border-amber/30 text-amber bg-amber/10">{nr.suggestedRouteNo}</span>
+                            <span className="text-xs text-ink-muted">
+                              {nr.riders}/{nr.suggestedCapacity} riders · starts {nr.routeStartTime}
+                            </span>
+                            {!nr.meetsConstraint && (
+                              <span className="text-xs text-coral font-medium">
+                                needs {nr.worstDurationMinutes}m ride — still before 06:00
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                        {isExpanded && (
+                          <table className="w-full text-xs border-t border-border">
+                            <thead>
+                              <tr className="text-left text-ink-muted uppercase tracking-wider">
+                                <th className="px-4 py-2 font-medium">Name</th>
+                                <th className="px-4 py-2 font-medium">Class / Role</th>
+                                <th className="px-4 py-2 font-medium">Type</th>
+                                <th className="px-4 py-2 font-medium">Pick stop</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {nr.roster.map((s) => (
+                                <tr key={s.studentId} className="border-t border-border/40">
+                                  <td className="px-4 py-1.5">{s.name}</td>
+                                  <td className="px-4 py-1.5 font-mono text-ink-muted">{s.classOrDesignation}</td>
+                                  <td className="px-4 py-1.5">
+                                    <span
+                                      className={`route-chip ${
+                                        s.userType === 'Student'
+                                          ? 'border-amber/30 text-amber bg-amber/10'
+                                          : 'border-teal/30 text-teal bg-teal/10'
+                                      }`}
+                                    >
+                                      {s.userType}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-1.5 text-ink-muted">{s.pickStop}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

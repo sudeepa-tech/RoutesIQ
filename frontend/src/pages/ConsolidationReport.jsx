@@ -112,6 +112,22 @@ export default function ConsolidationReport() {
               <StatCard label="Total savings / year" value={fmtINR(roi.totalAnnualSavings)} icon={IndianRupee} accent="teal" delta={`incl. fuel: ${fmtINR(-roi.annualFuelDeltaCost)}`} />
             </div>
 
+            <div className="panel p-4 text-sm">
+              {metrics.vehiclesFreedCount > 0 ? (
+                <span className="text-teal">
+                  ✓ {metrics.vehiclesFreedCount} vehicle{metrics.vehiclesFreedCount > 1 ? 's' : ''} can be merged and freed up —
+                  see the table below for exactly which routes combine.
+                </span>
+              ) : (
+                <span className="text-ink-muted">
+                  No vehicles can be merged right now — every under-utilized route is already too
+                  geographically spread out (or too close to the pickup-time floor) to safely combine
+                  with another without breaking the schedule constraints. This usually means the fleet
+                  is already at its minimum size for the current time window, not that nothing is optimized.
+                </span>
+              )}
+            </div>
+
             <div className="panel p-5">
               <h3 className="font-display font-medium text-sm mb-4">Suggested merges</h3>
               {result.suggestions.length === 0 ? (

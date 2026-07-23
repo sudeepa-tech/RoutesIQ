@@ -33,6 +33,7 @@ function buildFinalRoutes(optimization, consolidation) {
           utilization: suggestion.combinedUtilizationPct,
           status: 'merged',
           mergedFrom: suggestion.mergedRoutes,
+          pickupTimings: suggestion.pickupTimings,
         };
       }
       return {
@@ -44,6 +45,7 @@ function buildFinalRoutes(optimization, consolidation) {
         utilization: p.utilization,
         status: 'unchanged',
         mergedFrom: null,
+        pickupTimings: p.pickupTimings,
       };
     });
 }
@@ -167,7 +169,14 @@ export default function SuggestedMap() {
               radius={10}
               pathOptions={{ color: '#F5B301', fillColor: '#F5B301', fillOpacity: 1, weight: 2 }}
             >
-              <Tooltip permanent direction="top">{DEPOT.name}</Tooltip>
+              <Tooltip permanent direction="top">🏁 End — {DEPOT.name} (arrives 07:15)</Tooltip>
+              <Popup>
+                <div className="text-xs">
+                  <strong>Route end point</strong> — {DEPOT.name}
+                  <br />
+                  Every route arrives here by 07:15
+                </div>
+              </Popup>
             </CircleMarker>
 
             {visibleRoutes.map((r) => (
@@ -235,9 +244,34 @@ function RoutePolyline({ route, color }) {
     ...route.stops.map((s) => [s.lat, s.lng]),
     [DEPOT.lat, DEPOT.lng],
   ];
+  const firstStop = route.stops[0];
+  const startTime = route.pickupTimings?.[0]?.pickupTime;
   return (
     <>
       <Polyline positions={positions} pathOptions={{ color, weight: route.status === 'merged' ? 3 : 2, opacity: 0.85 }} />
+
+      {/* Start marker: the route's first pickup (farthest stop, earliest time) */}
+      {firstStop && (
+        <CircleMarker
+          center={[firstStop.lat, firstStop.lng]}
+          radius={9}
+          pathOptions={{ color: '#4ADE80', fillColor: '#4ADE80', fillOpacity: 0.95, weight: 2 }}
+        >
+          <Tooltip direction="top" offset={[0, -8]}>
+            <div className="text-xs">
+              <strong>Route start</strong> — {route.routeNo}
+              {startTime && <><br />Pickup begins {startTime}</>}
+            </div>
+          </Tooltip>
+          <Popup>
+            <div className="text-xs">
+              <strong>Start point</strong> — {route.routeNo} ({route.vehicleNo})
+              {startTime && <><br />First pickup at {startTime}</>}
+            </div>
+          </Popup>
+        </CircleMarker>
+      )}
+
       {route.stops.map((s) => {
         const impacted = route.status === 'merged' && s.originRouteNo !== route.routeNo;
         return (

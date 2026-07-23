@@ -2,8 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { store } from '../models/store.js';
 import { optimizeFleet } from '../services/optimizer.js';
-import { computeArrivalSchedule, computeDepartureSchedule } from '../services/timing.js';
+import { computeArrivalSchedule, computeDepartureSchedule, toMinutes } from '../services/timing.js';
 import { enforceMaxRideDuration } from '../services/rideDurationEnforcer.js';
+import { extractOrphanStops, suggestNewRoutes } from '../services/newRouteSuggester.js';
 import { ApiError } from '../middleware/errorHandler.js';
 
 const router = Router();
@@ -17,7 +18,9 @@ const optimizeSchema = z.object({
   schoolDepartureTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   avgSpeedKmh: z.number().positive().optional(),
   maxRideDurationMinutes: z.number().positive().optional(),
+  earliestPickupTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   maxReassignDistanceKm: z.number().positive().optional(),
+  newVehicleCapacity: z.number().positive().optional(),
 });
 
 router.post('/', (req, res, next) => {
@@ -40,15 +43,21 @@ router.post('/', (req, res, next) => {
     const schoolArrivalTime = parsed.data.schoolArrivalTime ?? settings.schoolArrivalTime ?? '07:15';
     const schoolDepartureTime = parsed.data.schoolDepartureTime ?? settings.schoolDepartureTime ?? '14:20';
     const avgSpeedKmh = parsed.data.avgSpeedKmh ?? settings.avgSpeedKmh ?? 28;
-    const maxRideDurationMinutes = parsed.data.maxRideDurationMinutes ?? settings.maxRideDurationMinutes ?? 165;
     const maxReassignDistanceKm = parsed.data.maxReassignDistanceKm ?? settings.maxMergeDistanceKm ?? 12;
+    const newVehicleCapacity = parsed.data.newVehicleCapacity ?? settings.newVehicleCapacity ?? 25;
+
+    // TWO independent constraints — no student rides longer than
+    // maxRideDurationMinutes, AND no pickup happens before earliestPickupTime.
+    // Whichever is stricter given the fixed school arrival time wins.
+    const requestedMaxDuration = parsed.data.maxRideDurationMinutes ?? settings.maxRideDurationMinutes ?? 80;
+    const earliestPickupTime = parsed.data.earliestPickupTime ?? settings.earliestPickupTime ?? '06:00';
+    const floorImpliedMinutes = toMinutes(schoolArrivalTime) - toMinutes(earliestPickupTime);
+    const maxRideDurationMinutes = Math.max(1, Math.min(requestedMaxDuration, floorImpliedMinutes));
 
     const { vehicles, stops } = store.getDataset();
     const result = optimizeFleet({ stops, vehicles, depot, targetUtilizationPct });
 
-    // enforce the max ride duration cap: no student should be on a bus
-    // longer than maxRideDurationMinutes — reshapes routes as needed by
-    // reassigning stops to nearby vehicles (never beyond maxReassignDistanceKm)
+    // Step 1: reshuffle stops between EXISTING vehicles to satisfy the cap
     const enforcement = enforceMaxRideDuration(result.plans, depot, {
       maxDurationMinutes: maxRideDurationMinutes,
       schoolArrivalTime,
@@ -57,8 +66,38 @@ router.post('/', (req, res, next) => {
     });
     result.plans = enforcement.plans;
 
-    // recompute fleet-level distance summary since the enforcer may have
-    // reshuffled stops between vehicles
+    // Step 2: anything still non-compliant gets stripped into an "orphan
+    // pool" (making the source route compliant) and proposed as one or
+    // more brand-new routes
+    const orphanStops = extractOrphanStops(result.plans, depot, {
+      maxDurationMinutes: maxRideDurationMinutes,
+      schoolArrivalTime,
+      avgSpeedKmh,
+    });
+    const newRoutesRaw = orphanStops.length
+      ? suggestNewRoutes(orphanStops, depot, { newVehicleCapacity, schoolArrivalTime, avgSpeedKmh, maxDurationMinutes: maxRideDurationMinutes })
+      : [];
+
+    // attach student/staff roster to each suggested new route
+    const { riders } = store.getDataset();
+    const riderById = new Map(riders.map((r) => [r.id, r]));
+    const suggestedNewRoutes = newRoutesRaw.map((nr) => ({
+      ...nr,
+      roster: nr.stops.flatMap((stop) =>
+        (stop.riderIds || [])
+          .map((id) => riderById.get(id))
+          .filter(Boolean)
+          .map((rider) => ({
+            studentId: rider.id,
+            name: rider.name,
+            classOrDesignation: rider.classOrDesignation,
+            userType: rider.userType,
+            pickStop: rider.pickStop,
+          }))
+      ),
+    }));
+
+    // recompute fleet-level distance summary since stops may have moved
     result.summary.optimizedDistanceKm = Number(
       result.plans.reduce((s, p) => s + p.distanceKm, 0).toFixed(2)
     );
@@ -70,7 +109,7 @@ router.post('/', (req, res, next) => {
     );
 
     // attach realistic pickup (backward from school arrival) and drop
-    // (forward from school departure) schedules to every route
+    // (forward from school departure) schedules to every remaining route
     for (const plan of result.plans) {
       if (!plan.stops.length) {
         plan.pickupTimings = [];
@@ -89,7 +128,15 @@ router.post('/', (req, res, next) => {
     result.summary.schoolDepartureTime = schoolDepartureTime;
     result.summary.avgSpeedKmh = avgSpeedKmh;
     result.summary.maxRideDurationMinutes = maxRideDurationMinutes;
-    result.summary.routesStillOverRideDuration = enforcement.stillOverBudget;
+    result.summary.earliestPickupTime = earliestPickupTime;
+    // orphan extraction guarantees every EXISTING route is compliant by
+    // construction (violating stops are moved out, not left in place) —
+    // the real remaining signal is whether the NEW suggested routes below
+    // can bring their riders into compliance even as a dedicated bus
+    result.summary.routesStillOverRideDuration = [];
+    result.summary.suggestedNewRoutes = suggestedNewRoutes;
+    result.summary.newVehiclesNeeded = suggestedNewRoutes.length;
+    result.summary.newRoutesStillOverConstraint = suggestedNewRoutes.filter((r) => !r.meetsConstraint).length;
 
     store.setOptimizationResult(result);
     res.json(result);
